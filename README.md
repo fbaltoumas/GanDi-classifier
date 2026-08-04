@@ -59,6 +59,29 @@ Or install each one individually:
   ```
   Alternatively, download a prebuilt binary from the [diamond releases page](https://github.com/bbuchfink/diamond/releases).
 
+## Docker
+
+A `Dockerfile` is provided that bundles `gandi-classifier` together with all of its external dependencies (`skani`, `prodigal`, `prodigal-gv`, `diamond`) via bioconda, so no separate dependency installation is needed.
+
+Build the image:
+
+```bash
+docker build -t gandi-classifier .
+```
+
+Run it (mount a local directory to `/data` so input/output files are accessible from the host):
+
+```bash
+docker run --rm -v "$(pwd)":/data gandi-classifier \
+    -i input.fasta -o output_dir -w full \
+    --skani_database /data/skani.db \
+    --diamond_database_dmnd /data/diamond.dmnd
+```
+
+Running the image with no arguments shows the help text (`docker run --rm gandi-classifier`).
+
+Note: the `Dockerfile` currently installs `gandi-classifier` via `git clone` + `pip install .` from source, since the package isn't published on PyPI yet. Once it is, the corresponding `RUN` step can be swapped for a plain `pip install gandi`.
+
 ## Usage
 
 ```bash
