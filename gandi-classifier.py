@@ -1,4 +1,4 @@
-import multiprocessing as mp
+import os
 import subprocess as sp
 from pathlib import Path
 from shutil import which, copy2
@@ -11,11 +11,11 @@ import pyfastx
 
 def get_exe_location(exe_name: str) -> str:
     exe_location = which(exe_name)
-    if exe_location == "" or exe_location is None:
+    if exe_location is None:
         raise RuntimeError(
-                        f"Could not find the '{exe_name}' executable. "
-                        f"Make sure it is installed and available on your PATH."
-                    )
+            f"Could not find the '{exe_name}' executable. "
+            f"Make sure it is installed and available on your PATH."
+        )
     return exe_location
 
 
@@ -92,6 +92,8 @@ class SkaniJob:
         raw_output = pd.read_csv(f"{self.output_prefix}.skani", sep="\t")
         proc_output = raw_output[['Query_name', 'Ref_name', 'ANI', 'Align_fraction_query', 'Align_fraction_ref']]
         proc_output.columns = ['query', 'hit', 'ani', 'qcov', 'tcov']
+        proc_output['qcov'] = proc_output['qcov'] * 100
+        proc_output['tcov'] = proc_output['tcov'] * 100
         proc_output = proc_output.sort_values(by=['ani', 'qcov', 'tcov'], ascending=[False,False,False], ignore_index=True)
         self.ani = proc_output
 
@@ -162,9 +164,9 @@ class DiamondJob:
             "1e-3",
 
             "--query",
-            self.input_file,
+            str(self.input_file),
             "--db",
-            self.database,
+            str(self.database),
             "--out",
             output,
             "--outfmt",
@@ -229,6 +231,7 @@ class GenomeAAICalculator:
 
         # reorder columns
         aai_result = aai_result[['query', 'hit', 'aai', 'std', 'ortholog_hits', 'qcov', 'tcov', 'raw_bitscore', 'norm_bitscore']]
+        aai_result = aai_result.sort_values(by=['aai', 'qcov', 'tcov'], ascending=[False,False,False], ignore_index=True)
         self.aai_result = aai_result
 
 
@@ -254,14 +257,17 @@ if __name__ == "__main__":
     copy2(input_file, work_input_file)
     try:
         fasta_input = pyfastx.Fasta(str(work_input_file))
-    except Exception as e:
+    except Exception:
         print(f"Input file is not a valid FASTA file: {input_file}")
         exit()
 
     # check cpu count
     cpus = args.threads
     if args.threads <=0:
-        cpus = mp.cpu_count()
+        if hasattr(os, "sched_getaffinity"):
+            cpus = len(os.sched_getaffinity(0))
+        else:
+            cpus = os.cpu_count() or 1
 
     # set workflow
     workflow = args.workflow.lower()
@@ -339,3 +345,57 @@ if __name__ == "__main__":
         )
         aai_calculator.calculate_aai()
         aai_calculator.aai_result.to_csv(f"{output_path}/AAI-result.tsv", sep="\t", index=False)
+
+    # now, depending on the workflow, choose what result will be the final output
+    if workflow == 'ani':
+        result = skani_job.ani[['query', 'hit', 'ani', 'qcov', 'tcov']].rename(
+            columns={'qcov': 'genome_qcov', 'tcov': 'genome_tcov'}
+        )
+    elif workflow == 'aai':
+        result = aai_calculator.aai_result[['query', 'hit', 'aai', 'qcov', 'tcov']].rename(
+            columns={'qcov': 'proteome_qcov', 'tcov': 'proteome_tcov'}
+        )
+    else:
+        # for full workflow, we need to merge the ANI and AAI results.
+        # we will keep only the ani/aai, qcov and tcov columns for each and rename them accordingly
+        ani_renamed = skani_job.ani[['query', 'hit', 'ani', 'qcov', 'tcov']].rename(
+            columns={'qcov': 'genome_qcov', 'tcov': 'genome_tcov'}
+        )
+        aai_renamed = aai_calculator.aai_result[['query', 'hit', 'aai', 'qcov', 'tcov']].rename(
+            columns={'qcov': 'proteome_qcov', 'tcov': 'proteome_tcov'}
+        )
+        result = ani_renamed.merge(
+            aai_renamed,
+            on=['query', 'hit'],
+            how='outer',
+            indicator=True
+        )
+        match_counts = result['_merge'].value_counts()
+        print(
+            f"ANI/AAI merge: {match_counts.get('both', 0)} query-hit pairs matched in both, "
+            f"{match_counts.get('left_only', 0)} ANI-only, {match_counts.get('right_only', 0)} AAI-only."
+        )
+        result = result.drop(columns='_merge')
+        result = result.sort_values(by=['ani', 'genome_qcov', 'genome_tcov', 'aai', 'proteome_qcov', 'proteome_tcov'], ascending=[False,False,False,False,False,False], ignore_index=True)
+
+    # if metadata is provided, we will use it to annotate the results based on the 'hit' column
+    if args.metadata is not None:
+        metadata_file = Path(args.metadata)
+        if not metadata_file.exists():
+            print(f"Metadata file does not exist: {metadata_file}. Exiting...")
+            exit()
+        metadata = pd.read_csv(metadata_file, sep="\t")
+        if 'hit' not in metadata.columns:
+            print(f"Metadata file does not contain a 'hit' column. Exiting...")
+            exit()
+        result = result.merge(metadata, on='hit', how='left', indicator=True)
+        metadata_match_counts = result['_merge'].value_counts()
+        print(
+            f"Metadata merge: {metadata_match_counts.get('both', 0)} rows matched metadata, "
+            f"{metadata_match_counts.get('left_only', 0)} rows had no metadata match."
+        )
+        result = result.drop(columns='_merge')
+
+    # save the processed result to a file
+    result.to_csv(f"{output_path}/final-result.tsv", sep="\t", index=False)
+    print(f"Final result saved to: {output_path}/final-result.tsv")
