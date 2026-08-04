@@ -1,5 +1,6 @@
 import os
 import subprocess as sp
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from shutil import which, copy2
 import argparse as ap
@@ -112,24 +113,22 @@ class SkaniJob:
 
 class ProdigalJob:
     def __init__(self, input_file: Path,
-                 output_prefix: Path, is_virus: bool = False,
-                 mode: str = 'meta') -> None:
+                 output_prefix: Path,
+                 mode: str = 'meta', cpus: int = 1, prodigal_exe: str = None) -> None:
         self.input_file = input_file
         self.output_prefix = output_prefix
-        self.is_virus = is_virus
-        self.prodigal_exe = "prodigal"
-        if self.is_virus is True:
-            self.prodigal_exe = "prodigal-gv"
         self.mode = mode.lower()
         if self.mode not in ['single', 'meta']:
             self.mode = 'meta'
-    
-    def run(self):
-        prodigal_output = f"{self.output_prefix}.gff"
-        prodigal_genes = f"{self.output_prefix}.fna"
-        prodigal_proteins = f"{self.output_prefix}.faa"
+        self.cpus = cpus
+        self.prodigal_exe = prodigal_exe
+
+    def _run_prodigal(self, input_file: Path, output_prefix: Path) -> None:
+        prodigal_output = f"{output_prefix}.gff"
+        prodigal_genes = f"{output_prefix}.fna"
+        prodigal_proteins = f"{output_prefix}.faa"
         cmd = [self.prodigal_exe,
-               '-i', str(self.input_file),
+               '-i', str(input_file),
                "-f", "gff",
                "-o", prodigal_output,
                "-a", prodigal_proteins,
@@ -144,11 +143,56 @@ class ProdigalJob:
             ) from e
         except sp.CalledProcessError as e:
             raise RuntimeError(
-                f"'{self.prodigal_exe}' failed on input '{self.input_file}' "
+                f"'{self.prodigal_exe}' failed on input '{input_file}' "
                 f"with exit code {e.returncode}.\n"
                 f"Command: {' '.join(cmd)}\n"
                 f"Stderr: {e.stderr.strip() if e.stderr else '(no stderr output)'}"
             ) from e
+
+    def run(self):
+        self._run_prodigal(self.input_file, self.output_prefix)
+
+    def run_parallel(self):
+        records = list(pyfastx.Fasta(str(self.input_file)))
+        num_chunks = max(1, min(self.cpus, len(records)))
+
+        if num_chunks == 1:
+            self.run()
+            return
+
+        chunks = [records[i::num_chunks] for i in range(num_chunks)]
+        chunk_prefixes = [f"{self.output_prefix}.chunk{i}" for i in range(num_chunks)]
+        for chunk_prefix, chunk_records in zip(chunk_prefixes, chunks):
+            with open(f"{chunk_prefix}.fasta", 'w') as handle:
+                for record in chunk_records:
+                    handle.write(f">{record.name}\n{record.seq}\n")
+
+        try:
+            with ThreadPoolExecutor(max_workers=num_chunks) as executor:
+                futures = [
+                    executor.submit(self._run_prodigal, f"{chunk_prefix}.fasta", chunk_prefix)
+                    for chunk_prefix in chunk_prefixes
+                ]
+                errors = []
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except RuntimeError as e:
+                        errors.append(str(e))
+            if errors:
+                raise RuntimeError("Parallel prodigal run failed:\n" + "\n".join(errors))
+
+            # merge chunk outputs into the final gff/fna/faa files
+            for extension in ['gff', 'fna', 'faa']:
+                with open(f"{self.output_prefix}.{extension}", 'w') as out_handle:
+                    for chunk_prefix in chunk_prefixes:
+                        with open(f"{chunk_prefix}.{extension}", 'r') as in_handle:
+                            out_handle.write(in_handle.read())
+        finally:
+            # delete the intermediate chunk files, whether the run succeeded or failed
+            for chunk_prefix in chunk_prefixes:
+                for extension in ['fasta', 'gff', 'fna', 'faa']:
+                    Path(f"{chunk_prefix}.{extension}").unlink(missing_ok=True)
 
 
 class DiamondJob:
@@ -393,10 +437,14 @@ if __name__ == "__main__":
         prodigal_job = ProdigalJob(
             work_input_file,
             output_prefix,
-            args.viral,
-            prodigal_mode
+            prodigal_mode,
+            cpus,
+            prodigal_exe
         )
-        prodigal_job.run()
+        if cpus >= 2:
+            prodigal_job.run_parallel()
+        else:
+            prodigal_job.run()
 
 
         # step 2. Run diamond
