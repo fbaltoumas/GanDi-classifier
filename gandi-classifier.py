@@ -6,7 +6,7 @@ import argparse as ap
 
 # 3rd party modules
 import numpy as np
-import pandas as pd
+import polars as pl
 import pyfastx
 import Bio.Phylo as Phylo
 from Bio.Phylo.TreeConstruction import DistanceMatrix, DistanceTreeConstructor
@@ -62,7 +62,7 @@ class SkaniJob:
         # exe
         self.skani_exe = skani_exe
         # processed output:
-        self.ani : pd.DataFrame = None
+        self.ani : pl.DataFrame = None
     
     def run(self):
         q_arg = "-q"
@@ -96,12 +96,17 @@ class SkaniJob:
             ) from e
 
     def process_output(self):
-        raw_output = pd.read_csv(f"{self.output_prefix}.skani", sep="\t")
-        proc_output = raw_output[['Query_name', 'Ref_name', 'ANI', 'Align_fraction_query', 'Align_fraction_ref']]
-        proc_output.columns = ['query', 'hit', 'ani', 'qcov', 'tcov']
-        proc_output['qcov'] = proc_output['qcov'] * 100
-        proc_output['tcov'] = proc_output['tcov'] * 100
-        proc_output = proc_output.sort_values(by=['ani', 'qcov', 'tcov'], ascending=[False,False,False], ignore_index=True)
+        raw_output = pl.read_csv(f"{self.output_prefix}.skani", separator="\t", infer_schema_length=None)
+        proc_output = raw_output.select(['Query_name', 'Ref_name', 'ANI', 'Align_fraction_query', 'Align_fraction_ref'])
+        proc_output = proc_output.rename({
+            'Query_name': 'query', 'Ref_name': 'hit', 'ANI': 'ani',
+            'Align_fraction_query': 'qcov', 'Align_fraction_ref': 'tcov'
+        })
+        proc_output = proc_output.with_columns([
+            (pl.col('qcov') * 100).alias('qcov'),
+            (pl.col('tcov') * 100).alias('tcov'),
+        ])
+        proc_output = proc_output.sort(['ani', 'qcov', 'tcov'], descending=[True, True, True], nulls_last=True)
         self.ani = proc_output
 
 
@@ -206,44 +211,48 @@ class DiamondJob:
 class GenomeAAICalculator:
     def __init__(self,
                  diamond_output_file: Path) -> None:
-        self.diamond_result = pd.read_csv(str(diamond_output_file), sep="\t", header=None,
-                                          names=['query', 'hit', 'pid', 'aln_length', 'mismatches', 'gap_opens',
-                                                 'q_start', 'q_end', 's_start', 's_end', 'evalue', 'bit_score',
-                                                 'qcovhsp', 'scovhsp'])
+        self.diamond_result = pl.read_csv(
+            str(diamond_output_file), separator="\t", has_header=False, infer_schema_length=None,
+            new_columns=['query', 'hit', 'pid', 'aln_length', 'mismatches', 'gap_opens',
+                         'q_start', 'q_end', 's_start', 's_end', 'evalue', 'bit_score',
+                         'qcovhsp', 'scovhsp']
+        )
         self.aai_result = None
 
     def calculate_aai(self, pid_cutoff: float = 30.0):
-        diamond_result = self.diamond_result
-        diamond_result['query_genome'] = diamond_result['query'].str.rsplit('_', n=1).str[0]
-        diamond_result['hit_genome'] = diamond_result['hit'].str.rsplit('_', n=1).str[0]
+        diamond_result = self.diamond_result.with_columns([
+            pl.col('query').str.replace(r'_[^_]*$', '').alias('query_genome'),
+            pl.col('hit').str.replace(r'_[^_]*$', '').alias('hit_genome'),
+        ])
 
         # sort table by bitscore and evalue first
-        diamond_result_sorted = diamond_result.sort_values(by=['bit_score', 'evalue'], ascending=[False,True])
+        diamond_result_sorted = diamond_result.sort(['bit_score', 'evalue'], descending=[True, False], nulls_last=True)
         # group by query and hit genome, and take the first row (best hit) for each query-hit genome pair
-        best_hits_per_genome = diamond_result_sorted.groupby(['query', 'hit_genome'], as_index=False).first()
+        best_hits_per_genome = diamond_result_sorted.group_by(['query', 'hit_genome'], maintain_order=True).first()
         # filter by percentage identity to get ortholog hits
-        best_hits_filtered = best_hits_per_genome[best_hits_per_genome['pid'] >= pid_cutoff]
+        best_hits_filtered = best_hits_per_genome.filter(pl.col('pid') >= pid_cutoff)
 
-        aai_result = (
-            best_hits_filtered.groupby(["query_genome", "hit_genome"], as_index=False).agg(
-                aai = ("pid", "mean"),
-                std = ("pid", "std"),
-                ortholog_hits = ("pid", "count"),
-                raw_bitscore = ("bit_score", "sum"),
-                qcov = ("qcovhsp", "mean"),
-                tcov = ("scovhsp", "mean")
-            )
-        ).rename(columns={"query_genome":'query', 'hit_genome':'hit'})
-        aai_result['norm_bitscore'] = aai_result['raw_bitscore'] / aai_result['ortholog_hits']
+        aai_result = best_hits_filtered.group_by(['query_genome', 'hit_genome']).agg([
+            pl.col('pid').mean().alias('aai'),
+            pl.col('pid').std().alias('std'),
+            pl.col('pid').count().alias('ortholog_hits'),
+            pl.col('bit_score').sum().alias('raw_bitscore'),
+            pl.col('qcovhsp').mean().alias('qcov'),
+            pl.col('scovhsp').mean().alias('tcov'),
+        ])
+        aai_result = aai_result.rename({'query_genome': 'query', 'hit_genome': 'hit'})
+        aai_result = aai_result.with_columns(
+            (pl.col('raw_bitscore') / pl.col('ortholog_hits')).alias('norm_bitscore')
+        )
 
         # reorder columns
-        aai_result = aai_result[['query', 'hit', 'aai', 'std', 'ortholog_hits', 'qcov', 'tcov', 'raw_bitscore', 'norm_bitscore']]
-        aai_result = aai_result.sort_values(by=['aai', 'qcov', 'tcov'], ascending=[False,False,False], ignore_index=True)
+        aai_result = aai_result.select(['query', 'hit', 'aai', 'std', 'ortholog_hits', 'qcov', 'tcov', 'raw_bitscore', 'norm_bitscore'])
+        aai_result = aai_result.sort(['aai', 'qcov', 'tcov'], descending=[True, True, True], nulls_last=True)
         self.aai_result = aai_result
 
 
 class Phylogeny:
-    def __init__(self, result: pd.DataFrame, metric: str, method: str = 'nj') -> None:
+    def __init__(self, result: pl.DataFrame, metric: str, method: str = 'nj') -> None:
         self.result = result
         self.value_column = metric
         self.method = method.lower()
@@ -252,8 +261,8 @@ class Phylogeny:
         self.tree = None
 
     def _build_distance_matrix(self) -> DistanceMatrix:
-        df = self.result[['query', 'hit', self.value_column]].dropna(subset=[self.value_column])
-        genomes = sorted(set(df['query']) | set(df['hit']))
+        df = self.result.select(['query', 'hit', self.value_column]).drop_nulls(subset=[self.value_column])
+        genomes = sorted(set(df['query'].to_list()) | set(df['hit'].to_list()))
         if len(genomes) < 2:
             raise RuntimeError(
                 f"Not enough genomes with a valid {self.value_column.upper()} value "
@@ -263,7 +272,7 @@ class Phylogeny:
         n = len(genomes)
         distances = np.full((n, n), np.nan)
         np.fill_diagonal(distances, 0.0)
-        for _, row in df.iterrows():
+        for row in df.iter_rows(named=True):
             i, j = genome_index[row['query']], genome_index[row['hit']]
             distance = (100 - row[self.value_column]) / 100
             distances[i, j] = distance
@@ -360,7 +369,7 @@ if __name__ == "__main__":
         skani_job.run()
         skani_job.process_output()
         # write processed ANI result
-        skani_job.ani.to_csv(f"{output_path}/ANI-result.tsv", sep="\t", index=False)
+        skani_job.ani.write_csv(f"{output_path}/ANI-result.tsv", separator="\t")
 
 
     if workflow in ['aai', 'full']:
@@ -407,39 +416,48 @@ if __name__ == "__main__":
             f"{output_path}/diamond-search.blout"
         )
         aai_calculator.calculate_aai()
-        aai_calculator.aai_result.to_csv(f"{output_path}/AAI-result.tsv", sep="\t", index=False)
+        aai_calculator.aai_result.write_csv(f"{output_path}/AAI-result.tsv", separator="\t")
 
     # now, depending on the workflow, choose what result will be the final output
     if workflow == 'ani':
-        result = skani_job.ani[['query', 'hit', 'ani', 'qcov', 'tcov']].rename(
-            columns={'qcov': 'genome_qcov', 'tcov': 'genome_tcov'}
+        result = skani_job.ani.select(['query', 'hit', 'ani', 'qcov', 'tcov']).rename(
+            {'qcov': 'genome_qcov', 'tcov': 'genome_tcov'}
         )
     elif workflow == 'aai':
-        result = aai_calculator.aai_result[['query', 'hit', 'aai', 'qcov', 'tcov']].rename(
-            columns={'qcov': 'proteome_qcov', 'tcov': 'proteome_tcov'}
+        result = aai_calculator.aai_result.select(['query', 'hit', 'aai', 'qcov', 'tcov']).rename(
+            {'qcov': 'proteome_qcov', 'tcov': 'proteome_tcov'}
         )
     else:
         # for full workflow, we need to merge the ANI and AAI results.
         # we will keep only the ani/aai, qcov and tcov columns for each and rename them accordingly
-        ani_renamed = skani_job.ani[['query', 'hit', 'ani', 'qcov', 'tcov']].rename(
-            columns={'qcov': 'genome_qcov', 'tcov': 'genome_tcov'}
-        )
-        aai_renamed = aai_calculator.aai_result[['query', 'hit', 'aai', 'qcov', 'tcov']].rename(
-            columns={'qcov': 'proteome_qcov', 'tcov': 'proteome_tcov'}
-        )
-        result = ani_renamed.merge(
+        ani_renamed = skani_job.ani.select(['query', 'hit', 'ani', 'qcov', 'tcov']).rename(
+            {'qcov': 'genome_qcov', 'tcov': 'genome_tcov'}
+        ).with_columns(pl.lit(True).alias('_ani_side'))
+        aai_renamed = aai_calculator.aai_result.select(['query', 'hit', 'aai', 'qcov', 'tcov']).rename(
+            {'qcov': 'proteome_qcov', 'tcov': 'proteome_tcov'}
+        ).with_columns(pl.lit(True).alias('_aai_side'))
+        result = ani_renamed.join(
             aai_renamed,
             on=['query', 'hit'],
-            how='outer',
-            indicator=True
+            how='full',
+            coalesce=True
         )
-        match_counts = result['_merge'].value_counts()
+        match_counts = result.select([
+            (pl.col('_ani_side').is_not_null() & pl.col('_aai_side').is_not_null()).sum().alias('both'),
+            (pl.col('_ani_side').is_not_null() & pl.col('_aai_side').is_null()).sum().alias('ani_only'),
+            (pl.col('_ani_side').is_null() & pl.col('_aai_side').is_not_null()).sum().alias('aai_only'),
+        ]).row(0, named=True)
+        both, ani_only, aai_only = match_counts['both'], match_counts['ani_only'], match_counts['aai_only']
         print(
-            f"ANI/AAI merge: {match_counts.get('both', 0)} query-hit pairs matched in both, "
-            f"{match_counts.get('left_only', 0)} ANI-only, {match_counts.get('right_only', 0)} AAI-only."
+            f"ANI/AAI merge: {both} query-hit pairs matched in both, "
+            f"{ani_only} ANI-only, {aai_only} AAI-only."
         )
-        result = result.drop(columns='_merge')
-        result = result.sort_values(by=['ani', 'genome_qcov', 'genome_tcov', 'aai', 'proteome_qcov', 'proteome_tcov'], ascending=[False,False,False,False,False,False], ignore_index=True)
+        result = result.drop(['_ani_side', '_aai_side'])
+        result = result.sort(
+            ['ani', 'genome_qcov', 'genome_tcov', 'aai', 'proteome_qcov', 'proteome_tcov'],
+            descending=[True, True, True, True, True, True],
+            nulls_last=True
+        )
 
     # if metadata is provided, we will use it to annotate the results based on the 'hit' column
     if args.metadata is not None:
@@ -447,20 +465,22 @@ if __name__ == "__main__":
         if not metadata_file.exists():
             print(f"Metadata file does not exist: {metadata_file}. Exiting...")
             exit()
-        metadata = pd.read_csv(metadata_file, sep="\t")
+        metadata = pl.read_csv(metadata_file, separator="\t", infer_schema_length=None)
         if 'hit' not in metadata.columns:
             print(f"Metadata file does not contain a 'hit' column. Exiting...")
             exit()
-        result = result.merge(metadata, on='hit', how='left', indicator=True)
-        metadata_match_counts = result['_merge'].value_counts()
+        metadata = metadata.with_columns(pl.lit(True).alias('_metadata_matched'))
+        result = result.join(metadata, on='hit', how='left', coalesce=True)
+        matched = int(result.select(pl.col('_metadata_matched').is_not_null().sum()).item())
+        unmatched = result.height - matched
         print(
-            f"Metadata merge: {metadata_match_counts.get('both', 0)} rows matched metadata, "
-            f"{metadata_match_counts.get('left_only', 0)} rows had no metadata match."
+            f"Metadata merge: {matched} rows matched metadata, "
+            f"{unmatched} rows had no metadata match."
         )
-        result = result.drop(columns='_merge')
+        result = result.drop('_metadata_matched')
 
     # save the processed result to a file
-    result.to_csv(f"{output_path}/final-result.tsv", sep="\t", index=False)
+    result.write_csv(f"{output_path}/final-result.tsv", separator="\t")
     print(f"Final result saved to: {output_path}/final-result.tsv")
 
     # if requested, construct phylogenetic tree(s) from the ANI/AAI distances
