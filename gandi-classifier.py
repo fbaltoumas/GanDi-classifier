@@ -3,6 +3,7 @@ import subprocess as sp
 from pathlib import Path
 from shutil import which, copy2
 import argparse as ap
+from collections import defaultdict, OrderedDict
 
 # 3rd party modules
 import pandas as pd
@@ -32,7 +33,9 @@ def cmd_arguments():
     protein = parser.add_argument_group("AAI (prodigal + diamond) options")
     protein.add_argument("--metagenome", required=False, action='store_true', help="If set, run prodigal in 'meta' mode. Used when dealing with multiple genomes or metagenomes")
     protein.add_argument("--viral", required=False, action='store_true', help="If set, treat sequences as viruses")
-    protein.add_argument("--diamond_database", required=False, help='Path to the diamond protein database')
+    protein.add_argument("--diamond_database_dmnd", required=False, help='Path to the diamond protein database DMND file')
+    protein.add_argument("--diamond_database_fasta", required=False, help='Path to the diamond protein database source FASTA file')
+
     annot = parser.add_argument_group("Post-processing and annotation options")
     annot.add_argument("--metadata", required=False, help="Path to the database metadata table (tab-delimited)")
     return parser.parse_args()
@@ -167,7 +170,15 @@ class DiamondJob:
             "--out",
             output,
             "--outfmt",
-            "6"
+            "6",
+            # define columns in outfmt 6
+            "qseqid", "sseqid", "pident", "length", "mismatch", "gapopen",
+            "qstart", "qend", "sstart", "send", "evalue", "bitscore",
+            "qcovhsp", "scovhsp", #query and target coverage of the HSP
+            "--query-cover",
+            "50",
+            "--subject-cover",
+            "50"
         ]
         try:
             sp.run(cmd, check=True, capture_output=True, text=True)
@@ -185,7 +196,55 @@ class DiamondJob:
             ) from e
 
 
+class GenomeAAICalculator:
+    def __init__(self,
+                 input_genome_file: Path,
+                 diamond_output_file: Path,
+                 diamond_ref_db_fasta: Path) -> None:
+        self.input_genome_proteins = pyfastx.Fasta(str(input_genome_file))
+        self.ref_genome_proteins = pyfastx.Fasta(str(diamond_ref_db_fasta))
+        self.diamond_result = pd.read_csv(str(diamond_output_file), sep="\t", header=None,
+                                          names=['query', 'hit', 'pid', 'aln_length', 'mismatches', 'gap_opens',
+                                                 'q_start', 'q_end', 's_start', 's_end', 'evalue', 'bit_score',
+                                                 'qcovhsp', 'scovhsp'])
+        self.aai_result = None
 
+    def calculate_aai(self, pid_cutoff: float = 30.0):
+        input_gene_to_genome = dict()
+        ref_gene_to_genome = dict()
+        for f in self.input_genome_proteins:
+            genome_id = "_".join(f.name.split("_")[0:-1])
+            input_gene_to_genome[f.name] = genome_id
+        for f in self.ref_genome_proteins:
+            genome_id = "_".join(f.name.split("_")[0:-1])
+            ref_gene_to_genome[f.name] = genome_id
+
+        diamond_result = self.diamond_result.copy()
+        diamond_result['query_genome'] = diamond_result['query'].map(input_gene_to_genome)
+        diamond_result['hit_genome'] = diamond_result['hit'].map(ref_gene_to_genome)
+
+        # sort table by bitscore and evalue first
+        diamond_result_sorted = diamond_result.sort_values(by=['bit_score', 'evalue'], ascending=[False,True])
+        # group by query and hit genome, and take the first row (best hit) for each query-hit genome pair
+        best_hits_per_genome = diamond_result_sorted.groupby(['query', 'hit_genome'], as_index=False).first()
+        # filter by percentage identity to get ortholog hits
+        best_hits_filtered = best_hits_per_genome[best_hits_per_genome['pid'] >= pid_cutoff]
+
+        aai_result = (
+            best_hits_filtered.groupby(["query_genome", "hit_genome"], as_index=False).agg(
+                aai = ("pid", "mean"),
+                std = ("pid", "std"),
+                ortholog_hits = ("pid", "count"),
+                raw_bitscore = ("bit_score", "sum"),
+                qcov = ("qcovhsp", "mean"),
+                tcov = ("scovhsp", "mean")
+            )
+        ).rename(columns={"query_genome":'query', 'hit_genome':'hit'})
+        aai_result['norm_bitscore'] = aai_result['raw_bitscore'] / aai_result['ortholog_hits']
+
+        # reorder columns
+        aai_result = aai_result[['query', 'hit', 'aai', 'std', 'ortholog_hits', 'qcov', 'tcov', 'raw_bitscore', 'norm_bitscore']]
+        self.aai_result = aai_result
 
 
 if __name__ == "__main__":
@@ -252,9 +311,10 @@ if __name__ == "__main__":
 
     if workflow in ['aai', 'full']:
 
-        if args.diamond_database is None:
+        if args.diamond_database_dmnd is None or args.diamond_database_fasta is None:
             print("No path to a diamond database given. Exiting...")
             exit()
+        
         # step 1: run prodigal to generate proteins
         prodigal_mode = 'single'
         if args.metagenome is True:
@@ -278,7 +338,7 @@ if __name__ == "__main__":
 
 
         # step 2. Run diamond
-        diamond_db = args.diamond_database
+        diamond_db = args.diamond_database_dmnd
         diamond_exe = get_exe_location("diamond")
         diamond_job = DiamondJob(
             f"{output_path}/prodigal.faa",
@@ -288,3 +348,12 @@ if __name__ == "__main__":
             diamond_exe
         )
         diamond_job.run()
+
+        # step 3. calculate AAI
+        aai_calculator = GenomeAAICalculator(
+            f"{output_path}/prodigal.faa",
+            f"{output_path}/diamond-search.blout",
+            args.diamond_database_fasta
+        )
+        aai_calculator.calculate_aai()
+        aai_calculator.aai_result.to_csv(f"{output_path}/AAI-result.tsv", sep="\t", index=False)
