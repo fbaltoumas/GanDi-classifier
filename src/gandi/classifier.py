@@ -17,9 +17,9 @@ def get_exe_location(exe_name: str) -> str:
     exe_location = which(exe_name)
     if exe_location is None:
         raise RuntimeError(
-            f"Could not find the '{exe_name}' executable. "
-            f"Make sure it is installed and available on your PATH."
-        )
+                        f"Could not find the '{exe_name}' executable. "
+                        f"Make sure it is installed and available on your PATH."
+                    )
     return exe_location
 
 
@@ -64,7 +64,7 @@ class SkaniJob:
         self.skani_exe = skani_exe
         # processed output:
         self.ani : pl.DataFrame = None
-    
+
     def run(self):
         q_arg = "-q"
         output = f"{self.output_prefix}.skani"
@@ -351,7 +351,7 @@ class Phylogeny:
         Phylo.write(self.tree, str(output_file), "newick")
 
 
-if __name__ == "__main__":
+def main():
     args = cmd_arguments()
 
     # check if input file xists
@@ -420,7 +420,7 @@ if __name__ == "__main__":
         if args.diamond_database_dmnd is None:
             print("No path to a diamond database given. Exiting...")
             exit()
-        
+
         # step 1: run prodigal to generate proteins
         prodigal_mode = 'single'
         if args.metagenome is True:
@@ -549,3 +549,7 @@ if __name__ == "__main__":
                 continue
             phylogeny.write_tree(tree_file)
             print(f"{metric.upper()}-based phylogenetic tree saved to: {tree_file}")
+
+
+if __name__ == "__main__":
+    main()

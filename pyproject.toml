@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gandi"
+version = "0.1.0"
+description = "Contig classifier for the Global Anaerobic Digestion (GanDi) database"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.9"
+authors = [
+    { name = "Fotis Baltoumas" }
+]
+dependencies = [
+    "numpy>=2.4.1",
+    "polars>=1.37.1",
+    "pyfastx>=2.3.0",
+    "biopython>=1.86",
+]
+
+[project.scripts]
+gandi-classifier = "gandi.classifier:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
