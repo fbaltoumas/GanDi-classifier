@@ -1,0 +1,4 @@
+numpy>=2.4.1
+polars>=1.37.1
+pyfastx>=2.3.0
+biopython>=1.86
