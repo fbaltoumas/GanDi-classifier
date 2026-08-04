@@ -3,7 +3,6 @@ import subprocess as sp
 from pathlib import Path
 from shutil import which, copy2
 import argparse as ap
-from collections import defaultdict, OrderedDict
 
 # 3rd party modules
 import pandas as pd
@@ -28,13 +27,12 @@ def cmd_arguments():
     general.add_argument("-w", "--workflow", required=False, default="full",help="Workflow type. Can be one of 'ani' (genome-based), 'aai' (proteome-based), or 'full' (both). Default is 'full'")
     general.add_argument("-t", "--threads", required=False, default=1, type=int, help="Number of CPU threads to use. Default: 1. Use 0 to get all CPU threads")
     skani = parser.add_argument_group("ANI (skani) options")
-    skani.add_argument("--multiple_genomes", action='store_true', required=False, help='If set, treat each sequencei in the input FASTA as a separate genome')
+    skani.add_argument("--multiple_genomes", action='store_true', required=False, help='If set, treat each sequence in the input FASTA as a separate genome')
     skani.add_argument("--skani_database", required=False, default=None, help="Path to an skani-compatible sketch database.")
     protein = parser.add_argument_group("AAI (prodigal + diamond) options")
     protein.add_argument("--metagenome", required=False, action='store_true', help="If set, run prodigal in 'meta' mode. Used when dealing with multiple genomes or metagenomes")
     protein.add_argument("--viral", required=False, action='store_true', help="If set, treat sequences as viruses")
     protein.add_argument("--diamond_database_dmnd", required=False, help='Path to the diamond protein database DMND file')
-    protein.add_argument("--diamond_database_fasta", required=False, help='Path to the diamond protein database source FASTA file')
 
     annot = parser.add_argument_group("Post-processing and annotation options")
     annot.add_argument("--metadata", required=False, help="Path to the database metadata table (tab-delimited)")
@@ -198,11 +196,7 @@ class DiamondJob:
 
 class GenomeAAICalculator:
     def __init__(self,
-                 input_genome_file: Path,
-                 diamond_output_file: Path,
-                 diamond_ref_db_fasta: Path) -> None:
-        self.input_genome_proteins = pyfastx.Fasta(str(input_genome_file))
-        self.ref_genome_proteins = pyfastx.Fasta(str(diamond_ref_db_fasta))
+                 diamond_output_file: Path) -> None:
         self.diamond_result = pd.read_csv(str(diamond_output_file), sep="\t", header=None,
                                           names=['query', 'hit', 'pid', 'aln_length', 'mismatches', 'gap_opens',
                                                  'q_start', 'q_end', 's_start', 's_end', 'evalue', 'bit_score',
@@ -210,18 +204,9 @@ class GenomeAAICalculator:
         self.aai_result = None
 
     def calculate_aai(self, pid_cutoff: float = 30.0):
-        input_gene_to_genome = dict()
-        ref_gene_to_genome = dict()
-        for f in self.input_genome_proteins:
-            genome_id = "_".join(f.name.split("_")[0:-1])
-            input_gene_to_genome[f.name] = genome_id
-        for f in self.ref_genome_proteins:
-            genome_id = "_".join(f.name.split("_")[0:-1])
-            ref_gene_to_genome[f.name] = genome_id
-
-        diamond_result = self.diamond_result.copy()
-        diamond_result['query_genome'] = diamond_result['query'].map(input_gene_to_genome)
-        diamond_result['hit_genome'] = diamond_result['hit'].map(ref_gene_to_genome)
+        diamond_result = self.diamond_result
+        diamond_result['query_genome'] = diamond_result['query'].str.rsplit('_', n=1).str[0]
+        diamond_result['hit_genome'] = diamond_result['hit'].str.rsplit('_', n=1).str[0]
 
         # sort table by bitscore and evalue first
         diamond_result_sorted = diamond_result.sort_values(by=['bit_score', 'evalue'], ascending=[False,True])
@@ -265,9 +250,10 @@ if __name__ == "__main__":
 
     # copy input to work path
     # also check that the input file is a valid FASTA file
-    copy2(input_file, f"{output_path}/{str(input_file)}")
+    work_input_file = output_path / input_file.name
+    copy2(input_file, work_input_file)
     try:
-        fasta_input = pyfastx.Fasta(str(f"{output_path}/{str(input_file)}"))
+        fasta_input = pyfastx.Fasta(str(work_input_file))
     except Exception as e:
         print(f"Input file is not a valid FASTA file: {input_file}")
         exit()
@@ -280,12 +266,11 @@ if __name__ == "__main__":
     # set workflow
     workflow = args.workflow.lower()
     if workflow not in ['full', 'ani', 'aai']:
-        workflow = 'ani'
+        workflow = 'full'
 
 
     # now, based on workflow type, run the appropriate function
     if workflow in ['ani', 'full']:
-        """"""
         if args.skani_database is None:
             print("No path to a sketch database given. Exiting...")
             exit()
@@ -296,7 +281,7 @@ if __name__ == "__main__":
         multifasta = args.multiple_genomes
         output_prefix_raw = f"{output_path}/skani_search"
         skani_job = SkaniJob(
-            input_file,
+            work_input_file,
             output_prefix_raw,
             skani_db,
             multifasta,
@@ -310,8 +295,7 @@ if __name__ == "__main__":
 
 
     if workflow in ['aai', 'full']:
-
-        if args.diamond_database_dmnd is None or args.diamond_database_fasta is None:
+        if args.diamond_database_dmnd is None:
             print("No path to a diamond database given. Exiting...")
             exit()
         
@@ -329,7 +313,7 @@ if __name__ == "__main__":
         if args.viral is True:
             prodigal_exe = get_exe_location("prodigal-gv")
         prodigal_job = ProdigalJob(
-            input_file,
+            work_input_file,
             output_prefix,
             args.viral,
             prodigal_mode
@@ -351,9 +335,7 @@ if __name__ == "__main__":
 
         # step 3. calculate AAI
         aai_calculator = GenomeAAICalculator(
-            f"{output_path}/prodigal.faa",
-            f"{output_path}/diamond-search.blout",
-            args.diamond_database_fasta
+            f"{output_path}/diamond-search.blout"
         )
         aai_calculator.calculate_aai()
         aai_calculator.aai_result.to_csv(f"{output_path}/AAI-result.tsv", sep="\t", index=False)
