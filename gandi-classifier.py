@@ -5,8 +5,11 @@ from shutil import which, copy2
 import argparse as ap
 
 # 3rd party modules
+import numpy as np
 import pandas as pd
 import pyfastx
+import Bio.Phylo as Phylo
+from Bio.Phylo.TreeConstruction import DistanceMatrix, DistanceTreeConstructor
 
 
 def get_exe_location(exe_name: str) -> str:
@@ -36,6 +39,10 @@ def cmd_arguments():
 
     annot = parser.add_argument_group("Post-processing and annotation options")
     annot.add_argument("--metadata", required=False, help="Path to the database metadata table (tab-delimited)")
+
+    phylogeny = parser.add_argument_group("Phylogeny tree options")
+    phylogeny.add_argument("--create_tree", required=False, action='store_true', help="If set, construct a phylogenetic tree from the ANI/AAI distances and save it in Newick format.")
+    phylogeny.add_argument("--tree_method", required=False, default='nj', choices=['nj', 'upgma'], help="Method used to construct the phylogenetic tree. Can be 'nj' (neighbor-joining) or 'upgma'. Default: 'nj'")
     return parser.parse_args()
 
 
@@ -235,6 +242,62 @@ class GenomeAAICalculator:
         self.aai_result = aai_result
 
 
+class Phylogeny:
+    def __init__(self, result: pd.DataFrame, metric: str, method: str = 'nj') -> None:
+        self.result = result
+        self.value_column = metric
+        self.method = method.lower()
+        if self.method not in ['nj', 'upgma']:
+            self.method = 'nj'
+        self.tree = None
+
+    def _build_distance_matrix(self) -> DistanceMatrix:
+        df = self.result[['query', 'hit', self.value_column]].dropna(subset=[self.value_column])
+        genomes = sorted(set(df['query']) | set(df['hit']))
+        if len(genomes) < 2:
+            raise RuntimeError(
+                f"Not enough genomes with a valid {self.value_column.upper()} value "
+                f"to construct a phylogenetic tree."
+            )
+        genome_index = {genome: i for i, genome in enumerate(genomes)}
+        n = len(genomes)
+        distances = np.full((n, n), np.nan)
+        np.fill_diagonal(distances, 0.0)
+        for _, row in df.iterrows():
+            i, j = genome_index[row['query']], genome_index[row['hit']]
+            distance = (100 - row[self.value_column]) / 100
+            distances[i, j] = distance
+            distances[j, i] = distance
+
+        missing = np.isnan(distances)
+        n_missing_pairs = int(missing.sum() / 2)
+        if n_missing_pairs > 0:
+            observed = distances[~missing]
+            fill_value = float(np.max(observed)) if observed.size > 0 else 1.0
+            print(
+                f"Phylogeny: {n_missing_pairs} genome pairs have no {self.value_column.upper()} value; "
+                f"filling with the maximum observed distance ({fill_value:.4f})."
+            )
+            distances[missing] = fill_value
+
+        matrix = [list(distances[i, :i + 1]) for i in range(n)]
+        return DistanceMatrix(names=genomes, matrix=matrix)
+
+    def build_tree(self):
+        distance_matrix = self._build_distance_matrix()
+        constructor = DistanceTreeConstructor()
+        if self.method == 'upgma':
+            self.tree = constructor.upgma(distance_matrix)
+        else:
+            self.tree = constructor.nj(distance_matrix)
+        return self.tree
+
+    def write_tree(self, output_file: Path) -> None:
+        if self.tree is None:
+            raise RuntimeError("Tree has not been constructed yet. Call build_tree() first.")
+        Phylo.write(self.tree, str(output_file), "newick")
+
+
 if __name__ == "__main__":
     args = cmd_arguments()
 
@@ -399,3 +462,22 @@ if __name__ == "__main__":
     # save the processed result to a file
     result.to_csv(f"{output_path}/final-result.tsv", sep="\t", index=False)
     print(f"Final result saved to: {output_path}/final-result.tsv")
+
+    # if requested, construct phylogenetic tree(s) from the ANI/AAI distances
+    if args.create_tree:
+        metrics_to_build = []
+        if workflow in ['ani', 'full']:
+            metrics_to_build.append('ani')
+        if workflow in ['aai', 'full']:
+            metrics_to_build.append('aai')
+
+        for metric in metrics_to_build:
+            tree_file = output_path / f"phylogeny_{metric}.tree"
+            try:
+                phylogeny = Phylogeny(result, metric, args.tree_method)
+                phylogeny.build_tree()
+            except RuntimeError as e:
+                print(f"Could not construct {metric.upper()}-based phylogenetic tree: {e}. Skipping...")
+                continue
+            phylogeny.write_tree(tree_file)
+            print(f"{metric.upper()}-based phylogenetic tree saved to: {tree_file}")
