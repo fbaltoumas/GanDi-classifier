@@ -59,6 +59,13 @@ Or install each one individually:
   ```
   Alternatively, download a prebuilt binary from the [diamond releases page](https://github.com/bbuchfink/diamond/releases).
 
+## Windows users
+
+`gandi-classifier` and its dependencies (`skani`, `prodigal`, `prodigal-gv`, `diamond`) are not supported natively on Windows — `bioconda`, which provides these tools, only supports Linux and macOS. To run this tool on Windows:
+
+1. Install and configure the Windows Subsystem for Linux (WSL). See the [official Microsoft WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install).
+2. Once inside your WSL Linux environment, proceed as normal — follow the [Installation](#installation) and [Installing dependencies](#installing-dependencies) sections above exactly as you would on native Linux.
+
 ## Docker
 
 A `Dockerfile` is provided that bundles `gandi-classifier` together with all of its external dependencies (`skani`, `prodigal`, `prodigal-gv`, `diamond`) via bioconda, so no separate dependency installation is needed.
