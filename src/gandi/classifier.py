@@ -100,7 +100,7 @@ class SkaniJob:
         raw_output = pl.read_csv(f"{self.output_prefix}.skani", separator="\t", infer_schema_length=None)
         proc_output = raw_output.select(['Query_name', 'Ref_name', 'ANI', 'Align_fraction_query', 'Align_fraction_ref'])
         proc_output = proc_output.rename({
-            'Query_name': 'query', 'Ref_name': 'hit', 'ANI': 'ani',
+            'Query_name': 'query', 'Ref_name': 'seq_name', 'ANI': 'ani',
             'Align_fraction_query': 'qcov', 'Align_fraction_ref': 'tcov'
         })
         proc_output = proc_output.with_columns([
@@ -284,13 +284,13 @@ class GenomeAAICalculator:
             pl.col('qcovhsp').mean().alias('qcov'),
             pl.col('scovhsp').mean().alias('tcov'),
         ])
-        aai_result = aai_result.rename({'query_genome': 'query', 'hit_genome': 'hit'})
+        aai_result = aai_result.rename({'query_genome': 'query', 'hit_genome': 'seq_name'})
         aai_result = aai_result.with_columns(
             (pl.col('raw_bitscore') / pl.col('ortholog_hits')).alias('norm_bitscore')
         )
 
         # reorder columns
-        aai_result = aai_result.select(['query', 'hit', 'aai', 'std', 'ortholog_hits', 'qcov', 'tcov', 'raw_bitscore', 'norm_bitscore'])
+        aai_result = aai_result.select(['query', 'seq_name', 'aai', 'std', 'ortholog_hits', 'qcov', 'tcov', 'raw_bitscore', 'norm_bitscore'])
         aai_result = aai_result.sort(['aai', 'qcov', 'tcov'], descending=[True, True, True], nulls_last=True)
         self.aai_result = aai_result
 
@@ -305,8 +305,8 @@ class Phylogeny:
         self.tree = None
 
     def _build_distance_matrix(self) -> DistanceMatrix:
-        df = self.result.select(['query', 'hit', self.value_column]).drop_nulls(subset=[self.value_column])
-        genomes = sorted(set(df['query'].to_list()) | set(df['hit'].to_list()))
+        df = self.result.select(['query', 'seq_name', self.value_column]).drop_nulls(subset=[self.value_column])
+        genomes = sorted(set(df['query'].to_list()) | set(df['seq_name'].to_list()))
         if len(genomes) < 2:
             raise RuntimeError(
                 f"Not enough genomes with a valid {self.value_column.upper()} value "
@@ -317,7 +317,7 @@ class Phylogeny:
         distances = np.full((n, n), np.nan)
         np.fill_diagonal(distances, 0.0)
         for row in df.iter_rows(named=True):
-            i, j = genome_index[row['query']], genome_index[row['hit']]
+            i, j = genome_index[row['query']], genome_index[row['seq_name']]
             distance = (100 - row[self.value_column]) / 100
             distances[i, j] = distance
             distances[j, i] = distance
@@ -468,25 +468,25 @@ def main():
 
     # now, depending on the workflow, choose what result will be the final output
     if workflow == 'ani':
-        result = skani_job.ani.select(['query', 'hit', 'ani', 'qcov', 'tcov']).rename(
+        result = skani_job.ani.select(['query', 'seq_name', 'ani', 'qcov', 'tcov']).rename(
             {'qcov': 'genome_qcov', 'tcov': 'genome_tcov'}
         )
     elif workflow == 'aai':
-        result = aai_calculator.aai_result.select(['query', 'hit', 'aai', 'qcov', 'tcov']).rename(
+        result = aai_calculator.aai_result.select(['query', 'seq_name', 'aai', 'qcov', 'tcov']).rename(
             {'qcov': 'proteome_qcov', 'tcov': 'proteome_tcov'}
         )
     else:
         # for full workflow, we need to merge the ANI and AAI results.
         # we will keep only the ani/aai, qcov and tcov columns for each and rename them accordingly
-        ani_renamed = skani_job.ani.select(['query', 'hit', 'ani', 'qcov', 'tcov']).rename(
+        ani_renamed = skani_job.ani.select(['query', 'seq_name', 'ani', 'qcov', 'tcov']).rename(
             {'qcov': 'genome_qcov', 'tcov': 'genome_tcov'}
         ).with_columns(pl.lit(True).alias('_ani_side'))
-        aai_renamed = aai_calculator.aai_result.select(['query', 'hit', 'aai', 'qcov', 'tcov']).rename(
+        aai_renamed = aai_calculator.aai_result.select(['query', 'seq_name', 'aai', 'qcov', 'tcov']).rename(
             {'qcov': 'proteome_qcov', 'tcov': 'proteome_tcov'}
         ).with_columns(pl.lit(True).alias('_aai_side'))
         result = ani_renamed.join(
             aai_renamed,
-            on=['query', 'hit'],
+            on=['query', 'seq_name'],
             how='full',
             coalesce=True
         )
@@ -507,18 +507,18 @@ def main():
             nulls_last=True
         )
 
-    # if metadata is provided, we will use it to annotate the results based on the 'hit' column
+    # if metadata is provided, we will use it to annotate the results based on the 'seq_name' column
     if args.metadata is not None:
         metadata_file = Path(args.metadata)
         if not metadata_file.exists():
             print(f"Metadata file does not exist: {metadata_file}. Exiting...")
             exit()
         metadata = pl.read_csv(metadata_file, separator="\t", infer_schema_length=None)
-        if 'hit' not in metadata.columns:
-            print(f"Metadata file does not contain a 'hit' column. Exiting...")
+        if 'seq_name' not in metadata.columns:
+            print(f"Metadata file does not contain a 'seq_name' column. Exiting...")
             exit()
         metadata = metadata.with_columns(pl.lit(True).alias('_metadata_matched'))
-        result = result.join(metadata, on='hit', how='left', coalesce=True)
+        result = result.join(metadata, on='seq_name', how='left', coalesce=True)
         matched = int(result.select(pl.col('_metadata_matched').is_not_null().sum()).item())
         unmatched = result.height - matched
         print(
