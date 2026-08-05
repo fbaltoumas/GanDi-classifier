@@ -120,3 +120,12 @@ Fixes, in order of preference:
    pip install --force-reinstall numpy --no-binary numpy -Csetup-args=-Dcpu-baseline="none"
    ```
    This build is slower for numpy-heavy operations than the stock wheel, but functionally correct on any x86-64 CPU.
+
+### `Illegal instruction (core dumped)` after importing polars
+
+Same root cause as above (a CPU/VM missing instructions polars' default build requires — in this case a wider set, including AVX/AVX2/FMA/BMI), but a different failure mode: polars crashes the whole process outright (`SIGILL`) rather than raising a catchable Python exception, so this can't be turned into a friendly error message — it has to be fixed at the install level.
+
+`gandi-classifier` already depends on `polars[rtcompat]` rather than plain `polars`, which installs an extra, broadly-compatible runtime (`polars-runtime-compat`) alongside the normal fast one; polars picks whichever one actually matches the CPU it's running on at import time, automatically and with no performance cost on capable CPUs. If you still hit this (e.g. an existing environment installed before this was added, or a version of `gandi` predating it), fix it directly:
+```bash
+pip install --force-reinstall "polars[rtcompat]"
+```
