@@ -82,7 +82,7 @@ Run it (mount a local directory to `/data` so input/output files are accessible 
 docker run --rm -v "$(pwd)":/data gandi-classifier \
     -i input.fasta -o output_dir -w full \
     --skani_database /data/skani.db \
-    --diamond_database_dmnd /data/diamond.dmnd
+    --diamond_database /data/diamond.dmnd
 ```
 
 Running the image with no arguments shows the help text (`docker run --rm gandi-classifier`).
@@ -94,7 +94,29 @@ Note: the `Dockerfile` currently installs `gandi-classifier` via `git clone` + `
 ```bash
 gandi-classifier -i input.fasta -o output_dir -w full \
     --skani_database /path/to/skani.db \
-    --diamond_database_dmnd /path/to/diamond.dmnd
+    --diamond_database /path/to/diamond.dmnd
 ```
 
 Run `gandi-classifier --help` for the full list of options.
+
+## Troubleshooting
+
+### `RuntimeError: NumPy was built with baseline optimizations... but your machine doesn't support...`
+
+This means the CPU numpy is running on is missing instructions (SSSE3/SSE4.1/SSE4.2/POPCNT) that numpy's official PyPI wheels require. This is not a bug in `gandi-classifier` — it's most commonly seen on virtual machines where the hypervisor masks CPU features from the guest for live-migration compatibility (e.g. Hyper-V's "Processor Compatibility Mode"), even though the physical CPU fully supports them.
+
+Fixes, in order of preference:
+
+1. **If you manage the VM/hypervisor**: disable processor/CPU compatibility mode on the VM so its real CPU features are exposed to the guest. See [Configure processor compatibility mode in Hyper-V](https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/configure-processor-compatibility-mode) (official Microsoft docs). This is the only fix that also restores full numpy performance.
+
+2. **If you can't change the VM's CPU configuration**, rebuild numpy from source with a lower SIMD baseline. If you installed from a git clone, a helper script is included that detects whether this is actually needed and does it for you:
+   ```bash
+   python3 scripts/check_cpu_baseline.py
+   ```
+   Run it before `pip install .` on a fresh setup, or afterwards to repair an already-broken install (no need to reinstall the `gandi` package itself afterwards — just re-run `gandi-classifier`).
+
+   If you don't have the repo cloned (e.g. installed via `pip install gandi`), run the equivalent command directly instead:
+   ```bash
+   pip install --force-reinstall numpy --no-binary numpy -Csetup-args=-Dcpu-baseline="none"
+   ```
+   This build is slower for numpy-heavy operations than the stock wheel, but functionally correct on any x86-64 CPU.

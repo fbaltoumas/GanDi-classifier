@@ -6,7 +6,24 @@ from shutil import which, copy2
 import argparse as ap
 
 # 3rd party modules
-import numpy as np
+try:
+    import numpy as np
+except RuntimeError as e:
+    if "baseline optimizations" in str(e):
+        raise RuntimeError(
+            "numpy failed to load because this CPU is missing instructions "
+            "(SSE3/SSSE3/SSE4.1/SSE4.2/POPCNT) that the installed numpy build requires.\n"
+            "This commonly happens on virtual machines where the hypervisor masks CPU "
+            "features for live-migration compatibility (e.g. Hyper-V 'Processor "
+            "Compatibility Mode') even though the physical CPU supports them.\n\n"
+            "To fix this, either:\n"
+            "  1. Disable processor/CPU compatibility mode on the VM so its real CPU "
+            "features are exposed to the guest, or\n"
+            "  2. Rebuild numpy from source with a lower SIMD baseline:\n"
+            "       pip uninstall numpy\n"
+            "       pip install numpy --no-binary numpy -Csetup-args=-Dcpu-baseline=\"none\"\n"
+        ) from e
+    raise
 import polars as pl
 import pyfastx
 import Bio.Phylo as Phylo
@@ -36,7 +53,7 @@ def cmd_arguments():
     protein = parser.add_argument_group("AAI (prodigal + diamond) options")
     protein.add_argument("--metagenome", required=False, action='store_true', help="If set, run prodigal in 'meta' mode. Used when dealing with multiple genomes or metagenomes")
     protein.add_argument("--viral", required=False, action='store_true', help="If set, treat sequences as viruses")
-    protein.add_argument("--diamond_database_dmnd", required=False, help='Path to the diamond protein database DMND file')
+    protein.add_argument("--diamond_database", required=False, help='Path to the diamond protein database DMND file')
 
     annot = parser.add_argument_group("Post-processing and annotation options")
     annot.add_argument("--metadata", required=False, help="Path to the database metadata table (tab-delimited)")
