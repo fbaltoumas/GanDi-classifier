@@ -3,7 +3,9 @@ FROM condaforge/miniforge3:latest
 LABEL description="GanDi-classifier: contig classifier for the Global Anaerobic Digestion (GanDi) database"
 
 # External bioinformatics dependencies (skani, prodigal, prodigal-gv, diamond) via bioconda,
-# plus git/pip needed to install gandi-classifier from source below.
+# git/pip needed to install gandi-classifier from source below, and C/C++ compilers in case
+# scripts/check_cpu_baseline.py needs to rebuild numpy from source (see comment below) --
+# numpy's build requires both.
 RUN mamba install -y -c bioconda -c conda-forge \
         skani \
         prodigal \
@@ -11,6 +13,8 @@ RUN mamba install -y -c bioconda -c conda-forge \
         diamond \
         git \
         pip \
+        c-compiler \
+        cxx-compiler \
     && mamba clean -afy
 
 # Building this image on a VM whose hypervisor masks CPU features (e.g. Hyper-V
