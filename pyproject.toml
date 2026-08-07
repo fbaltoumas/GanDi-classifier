@@ -21,6 +21,7 @@ dependencies = [
 
 [project.scripts]
 gandi-classifier = "gandi.classifier:main"
+gandi-download-db = "gandi.download_db:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
