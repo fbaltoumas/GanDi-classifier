@@ -3,9 +3,7 @@ FROM condaforge/miniforge3:latest
 LABEL description="GanDi-classifier: contig classifier for the Global Anaerobic Digestion (GanDi) database"
 
 # External bioinformatics dependencies (skani, prodigal, prodigal-gv, diamond) via bioconda,
-# git/pip needed to install gandi-classifier from source below, and C/C++ compilers in case
-# scripts/check_cpu_baseline.py needs to rebuild numpy from source (see comment below) --
-# numpy's build requires both.
+# plus git/pip needed to install gandi-classifier from source below.
 RUN mamba install -y -c bioconda -c conda-forge \
         skani \
         prodigal \
@@ -13,9 +11,26 @@ RUN mamba install -y -c bioconda -c conda-forge \
         diamond \
         git \
         pip \
-        c-compiler \
-        cxx-compiler \
     && mamba clean -afy
+
+# C/C++ compilers in case scripts/check_cpu_baseline.py needs to rebuild numpy from
+# source (see comment below). Deliberately the base image's own system gcc/g++ via
+# apt, not conda-forge's c-compiler/cxx-compiler packages: those bundle their own
+# sysroot/glibc built by conda-forge's own CI, which is a plausible explanation for
+# meson's compiler sanity check failing with "Executables created by c compiler
+# ... are not runnable" on a VM whose hypervisor masks CPU features (glibc's
+# CPU-dispatched routines, e.g. memcpy/strlen IFUNC resolvers, could behave
+# differently between that bundled glibc and the CPU than the base image's own
+# glibc) -- this was tried after ruling out compiler-default -march flags and a
+# /tmp noexec mount as the cause. The system compiler is linked against the same
+# glibc already used everywhere else in this image, avoiding that mismatch.
+# CC/CXX are set explicitly so pip's build backend picks these up regardless of
+# what else ends up on PATH.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+ENV CC=gcc
+ENV CXX=g++
 
 # Building this image on a VM whose hypervisor masks CPU features (e.g. Hyper-V
 # "Processor Compatibility Mode") hits the same numpy baseline RuntimeError at
