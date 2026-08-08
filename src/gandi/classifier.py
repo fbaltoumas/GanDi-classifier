@@ -1,9 +1,12 @@
 import os
 import subprocess as sp
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from shutil import which, copy2
 import argparse as ap
+
+logger = logging.getLogger(__name__)
 
 # 3rd party modules
 try:
@@ -48,8 +51,9 @@ def cmd_arguments():
     general.add_argument("-c", "--category", required=True, type=str, help="Data category to search. Must be one of these three: viruses, plasmids, or mags")
     general.add_argument("-d", "--database", required=True, type=str, help="Path to the GanDi-classifier database, e.g. '~/gandi/database/'")
     general.add_argument("-w", "--workflow", required=False, type=str, default="full", help="Workflow type. Can be one of 'ani' (genome-based), 'aai' (proteome-based), or 'full' (both). Default is 'full'")
-    general.add_argument("-m", "--multiple_genomes", action='store_true', required=False, help='If set, treat each sequence in the input FASTA as a separate genome.  Enables "-qi" option in skani and "-p meta" in prodigal')
+    general.add_argument("-m", "--multiple_genomes", action='store_true', required=False, help='If set, treat each sequence in the input FASTA as a separate genome.  Enables "--qi" option in skani and "-p meta" in prodigal')
     general.add_argument("-t", "--threads", required=False, default=1, type=int, help="Number of CPU threads to use. Default: 1. Use 0 to get all CPU threads")
+    general.add_argument("--quiet", required=False, action='store_true', help='Suppress informational logging output (only warnings and errors are shown).')
 
     phylogeny = parser.add_argument_group("Phylogeny tree options")
     phylogeny.add_argument("--create_tree", required=False, action='store_true', help="If set, construct a phylogenetic tree from the ANI/AAI distances and save it in Newick format.")
@@ -64,7 +68,7 @@ class Database:
             raise ValueError(
                 f"Search database must be one of 'plasmids', 'viruses', or 'mags' (got '{database_type}')"
             )
-        database_path = Path(database_path)
+        database_path = Path(database_path).expanduser()
         if not database_path.exists():
             raise FileNotFoundError(
                 f"{str(database_path)} does not exist"
@@ -107,7 +111,7 @@ class SkaniJob:
         q_arg = "-q"
         output = f"{self.output_prefix}.skani"
         if self.qi is True:
-            q_arg = "--pi"
+            q_arg = "--qi"
         cmd = [self.skani_exe,
                "search",
                q_arg,
@@ -365,7 +369,7 @@ class Phylogeny:
         if n_missing_pairs > 0:
             observed = distances[~missing]
             fill_value = float(np.max(observed)) if observed.size > 0 else 1.0
-            print(
+            logger.info(
                 f"Phylogeny: {n_missing_pairs} genome pairs have no {self.value_column.upper()} value; "
                 f"filling with the maximum observed distance ({fill_value:.4f})."
             )
@@ -391,11 +395,16 @@ class Phylogeny:
 
 def main():
     args = cmd_arguments()
+    logging.basicConfig(
+        level=logging.WARNING if args.quiet else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
 
-    # check if input file xists
+    # step 1. check if input file exists
+    logger.info("=== Step 1: Validating input and preparing output directory ===")
     input_file = Path(args.input)
     if not input_file.exists():
-        print(f"Incorrect input file name: {input_file}")
+        logger.error(f"Incorrect input file name: {input_file}")
         exit()
 
     # check if output path exists, and if not, create it
@@ -403,7 +412,7 @@ def main():
     if not output_path.exists():
         output_path.mkdir()
     else:
-        print("Path already exists, continuing...")
+        logger.info("Path already exists, continuing...")
 
     # copy input to work path
     # also check that the input file is a valid FASTA file
@@ -412,7 +421,7 @@ def main():
     try:
         fasta_input = pyfastx.Fasta(str(work_input_file))
     except Exception:
-        print(f"Input file is not a valid FASTA file: {input_file}")
+        logger.error(f"Input file is not a valid FASTA file: {input_file}")
         exit()
 
     # check cpu count
@@ -422,19 +431,22 @@ def main():
             cpus = len(os.sched_getaffinity(0))
         else:
             cpus = os.cpu_count() or 1
+    logger.info(f"Using {cpus} thread(s).")
 
-
-    # Define database
+    # step 2. Define database
+    logger.info("=== Step 2: Loading the reference database ===")
     database = Database(args.category, args.database)
+    logger.info(f"Using '{database.database_type}' database at {database.database_root}")
 
 
     # set workflow
     workflow = args.workflow.lower()
     if workflow not in ['full', 'ani', 'aai']:
         workflow = 'full'
-   
+
     # now, based on workflow type, run the appropriate function
     if workflow in ['ani', 'full']:
+        logger.info("=== Step 3: Running ANI workflow (skani) ===")
         skani_db = database.skani_db
 
         skani_exe = get_exe_location("skani")
@@ -452,9 +464,11 @@ def main():
         skani_job.process_output()
         # write processed ANI result
         skani_job.ani.write_csv(f"{output_path}/ANI-result.tsv", separator="\t")
+        logger.info("ANI workflow complete.")
 
 
     if workflow in ['aai', 'full']:
+        logger.info("=== Step 4: Running AAI workflow (prodigal + diamond) ===")
         # step 1: run prodigal to generate proteins
         # first, check if multiple_genomes is true and if so, set to meta
         prodigal_mode = 'single'
@@ -462,7 +476,7 @@ def main():
             prodigal_mode = 'meta'
         # also do a sequence length check. if below 20000, automatically set to 'meta'
         if prodigal_mode == 'single' and fasta_input.size < 20000:
-            print("Input sequence length < 20000 bps, automatically switching to 'meta' mode for prodigal.")
+            logger.info("Input sequence length < 20000 bps, automatically switching to 'meta' mode for prodigal.")
             prodigal_mode = 'meta'
         output_prefix = f"{output_path}/prodigal"
 
@@ -476,6 +490,7 @@ def main():
             cpus,
             prodigal_exe
         )
+        logger.info("Running prodigal...")
         if cpus >= 2:
             prodigal_job.run_parallel()
         else:
@@ -483,6 +498,7 @@ def main():
 
 
         # step 2. Run diamond
+        logger.info("Running diamond...")
         diamond_db = database.diamond_db
         diamond_exe = get_exe_location("diamond")
         diamond_job = DiamondJob(
@@ -495,13 +511,16 @@ def main():
         diamond_job.run()
 
         # step 3. calculate AAI
+        logger.info("Calculating AAI...")
         aai_calculator = GenomeAAICalculator(
             f"{output_path}/diamond-search.blout"
         )
         aai_calculator.calculate_aai()
         aai_calculator.aai_result.write_csv(f"{output_path}/AAI-result.tsv", separator="\t")
+        logger.info("AAI workflow complete.")
 
     # now, depending on the workflow, choose what result will be the final output
+    logger.info("=== Step 5: Merging and finalizing results ===")
     if workflow == 'ani':
         result = skani_job.ani.select(['query', 'seq_name', 'ani', 'qcov', 'tcov']).rename(
             {'qcov': 'genome_qcov', 'tcov': 'genome_tcov'}
@@ -531,7 +550,7 @@ def main():
             (pl.col('_ani_side').is_null() & pl.col('_aai_side').is_not_null()).sum().alias('aai_only'),
         ]).row(0, named=True)
         both, ani_only, aai_only = match_counts['both'], match_counts['ani_only'], match_counts['aai_only']
-        print(
+        logger.info(
             f"ANI/AAI merge: {both} query-hit pairs matched in both, "
             f"{ani_only} ANI-only, {aai_only} AAI-only."
         )
@@ -543,27 +562,30 @@ def main():
         )
 
     # Annotate results based on the 'seq_name' column, by merging with the metadata df
+    logger.info("=== Step 6: Annotating results with database metadata ===")
 
     metadata = pl.read_csv(database.metadata_db, separator="\t", infer_schema_length=None)
     if 'seq_name' not in metadata.columns:
-        print(f"Metadata file does not contain a 'seq_name' column. Exiting...")
+        logger.error("Metadata file does not contain a 'seq_name' column. Exiting...")
         exit()
     metadata = metadata.with_columns(pl.lit(True).alias('_metadata_matched'))
     result = result.join(metadata, on='seq_name', how='left', coalesce=True)
     matched = int(result.select(pl.col('_metadata_matched').is_not_null().sum()).item())
     unmatched = result.height - matched
-    print(
+    logger.info(
         f"Metadata merge: {matched} rows matched metadata, "
         f"{unmatched} rows had no metadata match."
     )
     result = result.drop('_metadata_matched')
 
     # save the processed result to a file
+    logger.info("=== Step 7: Saving final result ===")
     result.write_csv(f"{output_path}/final-result.tsv", separator="\t")
-    print(f"Final result saved to: {output_path}/final-result.tsv")
+    logger.info(f"Final result saved to: {output_path}/final-result.tsv")
 
     # if requested, construct phylogenetic tree(s) from the ANI/AAI distances
     if args.create_tree:
+        logger.info("=== Step 8: Building phylogenetic tree(s) ===")
         metrics_to_build = []
         if workflow in ['ani', 'full']:
             metrics_to_build.append('ani')
@@ -576,10 +598,10 @@ def main():
                 phylogeny = Phylogeny(result, metric, args.tree_method)
                 phylogeny.build_tree()
             except RuntimeError as e:
-                print(f"Could not construct {metric.upper()}-based phylogenetic tree: {e}. Skipping...")
+                logger.warning(f"Could not construct {metric.upper()}-based phylogenetic tree: {e}. Skipping...")
                 continue
             phylogeny.write_tree(tree_file)
-            print(f"{metric.upper()}-based phylogenetic tree saved to: {tree_file}")
+            logger.info(f"{metric.upper()}-based phylogenetic tree saved to: {tree_file}")
 
 
 if __name__ == "__main__":
