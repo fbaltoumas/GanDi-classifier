@@ -1,9 +1,9 @@
 FROM condaforge/miniforge3:latest
 
-LABEL description="GanDi-classifier: contig classifier for the Global Anaerobic Digestion (GanDi) database"
+LABEL description="gandi: contig classifier and reference-database downloader for the Global Anaerobic Digestion (GanDi) database"
 
 # External bioinformatics dependencies (skani, prodigal, prodigal-gv, diamond) via bioconda,
-# plus git/pip needed to install gandi-classifier from source below.
+# plus git/pip needed to install the gandi package from source below.
 RUN mamba install -y -c bioconda -c conda-forge \
         skani \
         prodigal \
@@ -35,7 +35,7 @@ ENV CXX=g++
 # Building this image on a VM whose hypervisor masks CPU features (e.g. Hyper-V
 # "Processor Compatibility Mode") hits the same numpy baseline RuntimeError at
 # build time, since the build runs on the host's actual (masked) CPU. Run the
-# CPU-baseline check before installing gandi-classifier so the correct numpy
+# CPU-baseline check before installing the gandi package so the correct numpy
 # build is already in place when pip resolves its dependencies.
 #
 # TMPDIR is redirected off of /tmp: if /tmp is mounted noexec on the build host
@@ -53,5 +53,5 @@ RUN git clone --depth 1 https://github.com/fbaltoumas/GanDi-classifier.git /opt/
 
 WORKDIR /data
 
-ENTRYPOINT ["gandi-classifier"]
+ENTRYPOINT ["gandi"]
 CMD ["--help"]

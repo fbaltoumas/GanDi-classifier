@@ -1,5 +1,5 @@
 # GanDi-classifier
-Contig classifier for the Global Anaerobic Digestion (GanDi) database
+Contig classifier and reference-database downloader for the Global Anaerobic Digestion (GanDi) database
 
 ## Installation
 
@@ -7,7 +7,7 @@ Contig classifier for the Global Anaerobic Digestion (GanDi) database
 pip install gandi
 ```
 
-This installs the `gandi-classifier` command on your `PATH`.
+This installs a single `gandi` command on your `PATH`, with two subcommands: `gandi classifier` and `gandi download-db`. Run `gandi --help` to see them.
 
 ### Installing from source
 
@@ -19,11 +19,11 @@ pip install .
 
 For an editable install (picks up code changes without reinstalling), use `pip install -e .` instead.
 
-`gandi-classifier` also relies on the external tools listed below being installed separately and available on `PATH` — see [Installing dependencies](#installing-dependencies).
+`gandi` also relies on the external tools listed below being installed separately and available on `PATH` — see [Installing dependencies](#installing-dependencies).
 
 ## Installing dependencies
 
-`gandi-classifier` shells out to `skani`, `prodigal`/`prodigal-gv`, and `diamond`. These are not Python packages and are not installed by `pip install gandi` — they need to be installed separately and be available on `PATH`.
+`gandi classifier` shells out to `skani`, `prodigal`/`prodigal-gv`, and `diamond`; `gandi download-db` shells out to `skani` and `diamond`. These are not Python packages and are not installed by `pip install gandi` — they need to be installed separately and be available on `PATH`.
 
 The easiest way is via [bioconda](https://bioconda.github.io/), which covers all four tools:
 
@@ -48,7 +48,7 @@ Or install each one individually:
   sudo apt install prodigal
   ```
 
-- **[prodigal-gv](https://github.com/apcamargo/prodigal-gv)** (AAI workflow, used with `--viral`)
+- **[prodigal-gv](https://github.com/apcamargo/prodigal-gv)** (AAI workflow, used automatically by `gandi classifier` when `-c viruses` is given)
   ```bash
   conda install -c bioconda prodigal-gv
   ```
@@ -61,49 +61,57 @@ Or install each one individually:
 
 ## Windows users
 
-`gandi-classifier` and its dependencies (`skani`, `prodigal`, `prodigal-gv`, `diamond`) are not supported natively on Windows — `bioconda`, which provides these tools, only supports Linux and macOS. To run this tool on Windows:
+`gandi` and its dependencies (`skani`, `prodigal`, `prodigal-gv`, `diamond`) are not supported natively on Windows — `bioconda`, which provides these tools, only supports Linux and macOS. To run this tool on Windows:
 
 1. Install and configure the Windows Subsystem for Linux (WSL). See the [official Microsoft WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install).
 2. Once inside your WSL Linux environment, proceed as normal — follow the [Installation](#installation) and [Installing dependencies](#installing-dependencies) sections above exactly as you would on native Linux.
 
 ## Docker
 
-A `Dockerfile` is provided that bundles `gandi-classifier` together with all of its external dependencies (`skani`, `prodigal`, `prodigal-gv`, `diamond`) via bioconda, so no separate dependency installation is needed.
+A `Dockerfile` is provided that bundles `gandi` together with all of its external dependencies (`skani`, `prodigal`, `prodigal-gv`, `diamond`) via bioconda, so no separate dependency installation is needed.
 
 Build the image:
 
 ```bash
-docker build -t gandi-classifier .
+docker build -t gandi .
 ```
 
-Run it (mount a local directory to `/data` so input/output files are accessible from the host):
+Run it (mount a local directory to `/data` so input/output/database files are accessible from the host). First download the reference database, then classify a genome against it:
 
 ```bash
-docker run --rm -v "$(pwd)":/data gandi-classifier \
-    -i input.fasta -o output_dir -w full \
-    --skani_database /data/skani.db \
-    --diamond_database /data/diamond.dmnd
+docker run --rm -v "$(pwd)":/data gandi download-db -o /data/gandi_db
+
+docker run --rm -v "$(pwd)":/data gandi classifier \
+    -i /data/input.fasta -o /data/output_dir -w full \
+    -c plasmids -d /data/gandi_db
 ```
 
-Running the image with no arguments shows the help text (`docker run --rm gandi-classifier`).
+Running the image with no arguments shows the top-level help text listing both subcommands (`docker run --rm gandi`).
 
-Note: the `Dockerfile` currently installs `gandi-classifier` via `git clone` + `pip install .` from source, since the package isn't published on PyPI yet. Once it is, the corresponding `RUN` step can be swapped for a plain `pip install gandi`.
+Note: the `Dockerfile` currently installs the `gandi` package via `git clone` + `pip install .` from source, since the package isn't published on PyPI yet. Once it is, the corresponding `RUN` step can be swapped for a plain `pip install gandi`.
 
 ## Usage
 
+Download and build the reference database (only needs to be done once):
+
 ```bash
-gandi-classifier -i input.fasta -o output_dir -w full \
-    --skani_database /path/to/skani.db \
-    --diamond_database /path/to/diamond.dmnd
+gandi download-db -o /path/to/database
 ```
 
-Run `gandi-classifier --help` for the full list of options.
+Classify a genome or set of contigs against it:
+
+```bash
+gandi classifier -i input.fasta -o output_dir -w full \
+    -c plasmids -d /path/to/database
+```
+
+Run `gandi --help` for an overview of both subcommands, or `gandi classifier --help` / `gandi download-db --help` for their full lists of options.
 
 ## Troubleshooting
 
 ### `RuntimeError: NumPy was built with baseline optimizations... but your machine doesn't support...`
 
-This means the CPU numpy is running on is missing instructions (SSSE3/SSE4.1/SSE4.2/POPCNT) that numpy's official PyPI wheels require. This is not a bug in `gandi-classifier` — it's most commonly seen on virtual machines where the hypervisor masks CPU features from the guest for live-migration compatibility (e.g. Hyper-V's "Processor Compatibility Mode"), even though the physical CPU fully supports them.
+This means the CPU numpy is running on is missing instructions (SSSE3/SSE4.1/SSE4.2/POPCNT) that numpy's official PyPI wheels require. This is not a bug in `gandi` — it's most commonly seen on virtual machines where the hypervisor masks CPU features from the guest for live-migration compatibility (e.g. Hyper-V's "Processor Compatibility Mode"), even though the physical CPU fully supports them.
 
 Fixes, in order of preference:
 
@@ -113,7 +121,7 @@ Fixes, in order of preference:
    ```bash
    python3 scripts/check_cpu_baseline.py
    ```
-   Run it before `pip install .` on a fresh setup, or afterwards to repair an already-broken install (no need to reinstall the `gandi` package itself afterwards — just re-run `gandi-classifier`).
+   Run it before `pip install .` on a fresh setup, or afterwards to repair an already-broken install (no need to reinstall the `gandi` package itself afterwards — just re-run `gandi`).
 
    If you don't have the repo cloned (e.g. installed via `pip install gandi`), run the equivalent command directly instead:
    ```bash
@@ -125,7 +133,7 @@ Fixes, in order of preference:
 
 Same root cause as above (a CPU/VM missing instructions polars' default build requires — in this case a wider set, including AVX/AVX2/FMA/BMI), but a different failure mode: polars crashes the whole process outright (`SIGILL`) rather than raising a catchable Python exception, so this can't be turned into a friendly error message — it has to be fixed at the install level.
 
-`gandi-classifier` already depends on `polars[rtcompat]` rather than plain `polars`, which installs an extra, broadly-compatible runtime (`polars-runtime-compat`) alongside the normal fast one; polars picks whichever one actually matches the CPU it's running on at import time, automatically and with no performance cost on capable CPUs. If you still hit this (e.g. an existing environment installed before this was added, or a version of `gandi` predating it), fix it directly:
+`gandi` already depends on `polars[rtcompat]` rather than plain `polars`, which installs an extra, broadly-compatible runtime (`polars-runtime-compat`) alongside the normal fast one; polars picks whichever one actually matches the CPU it's running on at import time, automatically and with no performance cost on capable CPUs. If you still hit this (e.g. an existing environment installed before this was added, or a version of `gandi` predating it), fix it directly:
 ```bash
 pip install --force-reinstall "polars[rtcompat]"
 ```
