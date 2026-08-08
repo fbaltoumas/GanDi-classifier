@@ -166,13 +166,13 @@ class DatabaseDownloader:
         logger.info(f"Download complete: {self.output_file}")
 
 
-def cmd_arguments():
-    parser = ap.ArgumentParser()
+def cmd_arguments(argv=None, prog=None):
+    parser = ap.ArgumentParser(prog=prog)
     parser.add_argument("-o", "--output", required=False, default=None, help="Path to store databases (present working directory, i.e. '.' by default)")
     parser.add_argument("-t", "--threads", required=False, default=0, type=int, help='Number of CPU threads to use. Default: 0 (use all CPUs)')
     parser.add_argument("--quiet", required=False, action='store_true', help='Suppress informational logging output (only warnings and errors are shown).')
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def get_exe_location(exe_name: str) -> str:
@@ -270,8 +270,8 @@ def diamond_makedb(input_path: Path, output_path: Path, threads: int = 1) -> Non
         ) from e
 
 
-def main():
-    args = cmd_arguments()
+def main(argv=None, prog=None):
+    args = cmd_arguments(argv, prog=prog)
     logging.basicConfig(
         level=logging.WARNING if args.quiet else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"

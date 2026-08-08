@@ -43,8 +43,8 @@ def get_exe_location(exe_name: str) -> str:
     return exe_location
 
 
-def cmd_arguments():
-    parser = ap.ArgumentParser()
+def cmd_arguments(argv=None, prog=None):
+    parser = ap.ArgumentParser(prog=prog)
     general = parser.add_argument_group("Input/output and run type options")
     general.add_argument("-i", "--input", required=True, type=str, help="Input genome(s) file in FASTA format.")
     general.add_argument("-o", "--output", required=True, type=str, help="Output prefix")
@@ -58,7 +58,7 @@ def cmd_arguments():
     phylogeny = parser.add_argument_group("Phylogeny tree options")
     phylogeny.add_argument("--create_tree", required=False, action='store_true', help="If set, construct a phylogenetic tree from the ANI/AAI distances and save it in Newick format.")
     phylogeny.add_argument("--tree_method", required=False, default='nj', choices=['nj', 'upgma'], help="Method used to construct the phylogenetic tree. Can be 'nj' (neighbor-joining) or 'upgma'. Default: 'nj'")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 
@@ -409,8 +409,8 @@ class Phylogeny:
         Phylo.write(self.tree, str(output_file), "newick")
 
 
-def main():
-    args = cmd_arguments()
+def main(argv=None, prog=None):
+    args = cmd_arguments(argv, prog=prog)
     logging.basicConfig(
         level=logging.WARNING if args.quiet else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
