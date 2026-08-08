@@ -86,9 +86,6 @@ class Database:
 
 
 
-
-
-
 class SkaniJob:
     def __init__(self, input_file: Path,
                  output_prefix: Path,
@@ -145,10 +142,16 @@ class SkaniJob:
             'Query_name': 'query', 'Ref_name': 'seq_name', 'ANI': 'ani',
             'Align_fraction_query': 'qcov', 'Align_fraction_ref': 'tcov'
         })
+        # explicit casts: with zero hits, skani still writes a header-only file, and
+        # polars can't infer numeric dtypes from zero data rows -- these columns would
+        # otherwise default to Utf8 and the multiplication below would raise.
         proc_output = proc_output.with_columns([
-            (pl.col('qcov') * 100).alias('qcov'),
-            (pl.col('tcov') * 100).alias('tcov'),
+            pl.col('ani').cast(pl.Float64),
+            (pl.col('qcov').cast(pl.Float64) * 100).alias('qcov'),
+            (pl.col('tcov').cast(pl.Float64) * 100).alias('tcov'),
         ])
+        if proc_output.height == 0:
+            logger.warning("Skani found no hits for the input sequence(s); ANI result will be empty.")
         proc_output = proc_output.sort(['ani', 'qcov', 'tcov'], descending=[True, True, True], nulls_last=True)
         self.ani = proc_output
 
@@ -295,14 +298,27 @@ class DiamondJob:
 
 
 class GenomeAAICalculator:
+    _DIAMOND_SCHEMA = {
+        'query': pl.Utf8, 'hit': pl.Utf8, 'pid': pl.Float64, 'aln_length': pl.Int64,
+        'mismatches': pl.Int64, 'gap_opens': pl.Int64, 'q_start': pl.Int64, 'q_end': pl.Int64,
+        's_start': pl.Int64, 's_end': pl.Int64, 'evalue': pl.Float64, 'bit_score': pl.Float64,
+        'qcovhsp': pl.Float64, 'scovhsp': pl.Float64,
+    }
+
     def __init__(self,
                  diamond_output_file: Path) -> None:
-        self.diamond_result = pl.read_csv(
-            str(diamond_output_file), separator="\t", has_header=False, infer_schema_length=None,
-            new_columns=['query', 'hit', 'pid', 'aln_length', 'mismatches', 'gap_opens',
-                         'q_start', 'q_end', 's_start', 's_end', 'evalue', 'bit_score',
-                         'qcovhsp', 'scovhsp']
-        )
+        diamond_output_file = Path(diamond_output_file)
+        if diamond_output_file.stat().st_size == 0:
+            # diamond found no hits at all, so it wrote an empty file. Use an empty,
+            # correctly-typed frame instead of letting pl.read_csv raise NoDataError --
+            # the rest of calculate_aai() already handles zero-row input correctly.
+            logger.warning("Diamond found no hits for the input sequence(s); AAI result will be empty.")
+            self.diamond_result = pl.DataFrame(schema=self._DIAMOND_SCHEMA)
+        else:
+            self.diamond_result = pl.read_csv(
+                str(diamond_output_file), separator="\t", has_header=False, infer_schema_length=None,
+                new_columns=list(self._DIAMOND_SCHEMA.keys())
+            )
         self.aai_result = None
 
     def calculate_aai(self, pid_cutoff: float = 30.0):
@@ -464,6 +480,12 @@ def main():
         skani_job.process_output()
         # write processed ANI result
         skani_job.ani.write_csv(f"{output_path}/ANI-result.tsv", separator="\t")
+        if skani_job.ani.height == 0:
+            if workflow == 'ani':
+                logger.error("No ANI hits found between the input and the reference database. Exiting...")
+                exit()
+            else:
+                logger.warning("No ANI hits found between the input and the reference database; continuing with AAI results only.")
         logger.info("ANI workflow complete.")
 
 
@@ -517,7 +539,16 @@ def main():
         )
         aai_calculator.calculate_aai()
         aai_calculator.aai_result.write_csv(f"{output_path}/AAI-result.tsv", separator="\t")
+        if aai_calculator.aai_result.height == 0:
+            if workflow == 'aai':
+                logger.error("No AAI hits found between the input and the reference database. Exiting...")
+                exit()
+            else:
+                logger.warning("No AAI hits found between the input and the reference database; continuing with ANI results only.")
         logger.info("AAI workflow complete.")
+
+    if workflow == 'full' and skani_job.ani.height == 0 and aai_calculator.aai_result.height == 0:
+        logger.warning("No hits found in either the ANI or AAI workflow; the final result will be empty.")
 
     # now, depending on the workflow, choose what result will be the final output
     logger.info("=== Step 5: Merging and finalizing results ===")
