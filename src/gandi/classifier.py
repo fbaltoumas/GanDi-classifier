@@ -43,25 +43,46 @@ def get_exe_location(exe_name: str) -> str:
 def cmd_arguments():
     parser = ap.ArgumentParser()
     general = parser.add_argument_group("Input/output and run type options")
-    general.add_argument("-i", "--input", required=True, help='Input genome(s) file in FASTA format.')
-    general.add_argument("-o", "--output", required=True, help="Output prefix")
-    general.add_argument("-w", "--workflow", required=False, default="full",help="Workflow type. Can be one of 'ani' (genome-based), 'aai' (proteome-based), or 'full' (both). Default is 'full'")
+    general.add_argument("-i", "--input", required=True, type=str, help="Input genome(s) file in FASTA format.")
+    general.add_argument("-o", "--output", required=True, type=str, help="Output prefix")
+    general.add_argument("-c", "--category", required=True, type=str, help="Data category to search. Must be one of these three: viruses, plasmids, or mags")
+    general.add_argument("-d", "--database", required=True, type=str, help="Path to the GanDi-classifier database, e.g. '~/gandi/database/'")
+    general.add_argument("-w", "--workflow", required=False, type=str, default="full", help="Workflow type. Can be one of 'ani' (genome-based), 'aai' (proteome-based), or 'full' (both). Default is 'full'")
+    general.add_argument("-m", "--multiple_genomes", action='store_true', required=False, help='If set, treat each sequence in the input FASTA as a separate genome.  Enables "-qi" option in skani and "-p meta" in prodigal')
     general.add_argument("-t", "--threads", required=False, default=1, type=int, help="Number of CPU threads to use. Default: 1. Use 0 to get all CPU threads")
-    skani = parser.add_argument_group("ANI (skani) options")
-    skani.add_argument("--multiple_genomes", action='store_true', required=False, help='If set, treat each sequence in the input FASTA as a separate genome')
-    skani.add_argument("--skani_database", required=False, default=None, help="Path to an skani-compatible sketch database.")
-    protein = parser.add_argument_group("AAI (prodigal + diamond) options")
-    protein.add_argument("--metagenome", required=False, action='store_true', help="If set, run prodigal in 'meta' mode. Used when dealing with multiple genomes or metagenomes")
-    protein.add_argument("--viral", required=False, action='store_true', help="If set, treat sequences as viruses")
-    protein.add_argument("--diamond_database", required=False, help='Path to the diamond protein database DMND file')
-
-    annot = parser.add_argument_group("Post-processing and annotation options")
-    annot.add_argument("--metadata", required=False, help="Path to the database metadata table (tab-delimited)")
 
     phylogeny = parser.add_argument_group("Phylogeny tree options")
     phylogeny.add_argument("--create_tree", required=False, action='store_true', help="If set, construct a phylogenetic tree from the ANI/AAI distances and save it in Newick format.")
     phylogeny.add_argument("--tree_method", required=False, default='nj', choices=['nj', 'upgma'], help="Method used to construct the phylogenetic tree. Can be 'nj' (neighbor-joining) or 'upgma'. Default: 'nj'")
     return parser.parse_args()
+
+
+
+class Database:
+    def __init__(self, database_type: str, database_path: Path) -> None:
+        if database_type.lower() not in ['viruses', 'plasmids', 'mags']:
+            raise ValueError(
+                f"Search database must be one of 'plasmids', 'viruses', or 'mags' (got '{database_type}')"
+            )
+        database_path = Path(database_path)
+        if not database_path.exists():
+            raise FileNotFoundError(
+                f"{str(database_path)} does not exist"
+            )
+        self.database_type = database_type.lower()
+        self.database_root = database_path
+        self.skani_db  = Path(f"{self.database_root}/skani/{self.database_type}")
+        self.diamond_db = Path(f"{self.database_root}/diamond/{self.database_type}.dmnd")
+        self.metadata_db = Path(f"{self.database_root}/metadata/{self.database_type}.tsv.gz")
+        for db in [self.skani_db, self.diamond_db, self.metadata_db]:
+            if not db.exists():
+                raise FileNotFoundError(
+                    f"Database file {db} not found in the supplied path."
+                )
+
+
+
+
 
 
 class SkaniJob:
@@ -402,28 +423,28 @@ def main():
         else:
             cpus = os.cpu_count() or 1
 
+
+    # Define database
+    database = Database(args.category, args.database)
+
+
     # set workflow
     workflow = args.workflow.lower()
     if workflow not in ['full', 'ani', 'aai']:
         workflow = 'full'
-
-
+   
     # now, based on workflow type, run the appropriate function
     if workflow in ['ani', 'full']:
-        if args.skani_database is None:
-            print("No path to a sketch database given. Exiting...")
-            exit()
-        skani_db = args.skani_database
+        skani_db = database.skani_db
 
         skani_exe = get_exe_location("skani")
-
-        multifasta = args.multiple_genomes
+        skani_multifasta = args.multiple_genomes
         output_prefix_raw = f"{output_path}/skani_search"
         skani_job = SkaniJob(
             work_input_file,
             output_prefix_raw,
             skani_db,
-            multifasta,
+            skani_multifasta,
             cpus,
             skani_exe
         )
@@ -434,22 +455,19 @@ def main():
 
 
     if workflow in ['aai', 'full']:
-        if args.diamond_database_dmnd is None:
-            print("No path to a diamond database given. Exiting...")
-            exit()
-
         # step 1: run prodigal to generate proteins
+        # first, check if multiple_genomes is true and if so, set to meta
         prodigal_mode = 'single'
-        if args.metagenome is True:
+        if args.multiple_genomes:
             prodigal_mode = 'meta'
-        # but, also do a sequence length check
-        if prodigal_mode =='single' and fasta_input.size < 20000:
+        # also do a sequence length check. if below 20000, automatically set to 'meta'
+        if prodigal_mode == 'single' and fasta_input.size < 20000:
             print("Input sequence length < 20000 bps, automatically switching to 'meta' mode for prodigal.")
             prodigal_mode = 'meta'
         output_prefix = f"{output_path}/prodigal"
 
         prodigal_exe = get_exe_location("prodigal")
-        if args.viral is True:
+        if args.category.lower() == 'viruses':
             prodigal_exe = get_exe_location("prodigal-gv")
         prodigal_job = ProdigalJob(
             work_input_file,
@@ -465,7 +483,7 @@ def main():
 
 
         # step 2. Run diamond
-        diamond_db = args.diamond_database_dmnd
+        diamond_db = database.diamond_db
         diamond_exe = get_exe_location("diamond")
         diamond_job = DiamondJob(
             f"{output_path}/prodigal.faa",
@@ -524,25 +542,21 @@ def main():
             nulls_last=True
         )
 
-    # if metadata is provided, we will use it to annotate the results based on the 'seq_name' column
-    if args.metadata is not None:
-        metadata_file = Path(args.metadata)
-        if not metadata_file.exists():
-            print(f"Metadata file does not exist: {metadata_file}. Exiting...")
-            exit()
-        metadata = pl.read_csv(metadata_file, separator="\t", infer_schema_length=None)
-        if 'seq_name' not in metadata.columns:
-            print(f"Metadata file does not contain a 'seq_name' column. Exiting...")
-            exit()
-        metadata = metadata.with_columns(pl.lit(True).alias('_metadata_matched'))
-        result = result.join(metadata, on='seq_name', how='left', coalesce=True)
-        matched = int(result.select(pl.col('_metadata_matched').is_not_null().sum()).item())
-        unmatched = result.height - matched
-        print(
-            f"Metadata merge: {matched} rows matched metadata, "
-            f"{unmatched} rows had no metadata match."
-        )
-        result = result.drop('_metadata_matched')
+    # Annotate results based on the 'seq_name' column, by merging with the metadata df
+
+    metadata = pl.read_csv(database.metadata_db, separator="\t", infer_schema_length=None)
+    if 'seq_name' not in metadata.columns:
+        print(f"Metadata file does not contain a 'seq_name' column. Exiting...")
+        exit()
+    metadata = metadata.with_columns(pl.lit(True).alias('_metadata_matched'))
+    result = result.join(metadata, on='seq_name', how='left', coalesce=True)
+    matched = int(result.select(pl.col('_metadata_matched').is_not_null().sum()).item())
+    unmatched = result.height - matched
+    print(
+        f"Metadata merge: {matched} rows matched metadata, "
+        f"{unmatched} rows had no metadata match."
+    )
+    result = result.drop('_metadata_matched')
 
     # save the processed result to a file
     result.write_csv(f"{output_path}/final-result.tsv", separator="\t")

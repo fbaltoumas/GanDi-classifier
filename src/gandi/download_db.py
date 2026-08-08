@@ -20,7 +20,7 @@ URL = "https://www.gandi-db.org/datasets/gandi-classifier-db.tar.gz"
 
 
 class DatabaseDownloader:
-    def __init__(self, url: str, output_file: Path,
+    def __init__(self, url: str, output_file: Path, # type: ignore
                  chunk_size: int = 32768, report_interval: float = 0.5, threads: int = 1,
                  max_retries: int = 5, retry_backoff: float = 1.0) -> None:
         self.url = url
