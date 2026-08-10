@@ -58,6 +58,7 @@ def cmd_arguments(argv=None, prog=None):
     phylogeny = parser.add_argument_group("Phylogeny tree options")
     phylogeny.add_argument("--create_tree", required=False, action='store_true', help="If set, construct a phylogenetic tree from the ANI/AAI distances and save it in Newick format.")
     phylogeny.add_argument("--tree_method", required=False, default='nj', choices=['nj', 'upgma'], help="Method used to construct the phylogenetic tree. Can be 'nj' (neighbor-joining) or 'upgma'. Default: 'nj'")
+    phylogeny.add_argument("--otus_only", required=False, action='store_true', help='If set, use only one genome per OTU for phylogeny calculation.')
     return parser.parse_args(argv)
 
 
@@ -623,10 +624,28 @@ def main(argv=None, prog=None):
         if workflow in ['aai', 'full']:
             metrics_to_build.append('aai')
 
+        result_to_use = result
+        if args.otus_only:
+            if args.category.lower() == 'plasmids':
+                otu_col = 'ptu'
+            elif args.category.lower() == 'viruses':
+                otu_col = 'votu'
+            else:
+                otu_col = 'motu'
+            if workflow == 'ani':
+                sort_cols, sort_desc = [otu_col, 'ani'], [False, True]
+            elif workflow == 'aai':
+                sort_cols, sort_desc = [otu_col, 'aai'], [False, True]
+            else:
+                sort_cols, sort_desc = [otu_col, 'ani', 'aai'], [False, True, True]
+            result_to_use = result_to_use.sort(
+                by=sort_cols, descending=sort_desc, nulls_last=True
+            ).unique(subset=['query', otu_col], keep='first')
+
         for metric in metrics_to_build:
             tree_file = output_path / f"phylogeny_{metric}.tree"
             try:
-                phylogeny = Phylogeny(result, metric, args.tree_method)
+                phylogeny = Phylogeny(result_to_use, metric, args.tree_method)
                 phylogeny.build_tree()
             except RuntimeError as e:
                 logger.warning(f"Could not construct {metric.upper()}-based phylogenetic tree: {e}. Skipping...")
