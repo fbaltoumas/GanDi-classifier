@@ -55,10 +55,10 @@ def cmd_arguments(argv=None, prog=None):
     general.add_argument("-t", "--threads", required=False, default=1, type=int, help="Number of CPU threads to use. Default: 1. Use 0 to get all CPU threads")
     general.add_argument("--quiet", required=False, action='store_true', help='Suppress informational logging output (only warnings and errors are shown).')
 
-    phylogeny = parser.add_argument_group("Phylogeny tree options")
-    phylogeny.add_argument("--create_tree", required=False, action='store_true', help="If set, construct a phylogenetic tree from the ANI/AAI distances and save it in Newick format.")
-    phylogeny.add_argument("--tree_method", required=False, default='nj', choices=['nj', 'upgma'], help="Method used to construct the phylogenetic tree. Can be 'nj' (neighbor-joining) or 'upgma'. Default: 'nj'")
-    phylogeny.add_argument("--otus_only", required=False, action='store_true', help='If set, use only one genome per OTU for phylogeny calculation.')
+    # phylogeny = parser.add_argument_group("Phylogeny tree options")
+    # phylogeny.add_argument("--create_tree", required=False, action='store_true', help="If set, construct a phylogenetic tree from the ANI/AAI distances and save it in Newick format.")
+    # phylogeny.add_argument("--tree_method", required=False, default='nj', choices=['nj', 'upgma'], help="Method used to construct the phylogenetic tree. Can be 'nj' (neighbor-joining) or 'upgma'. Default: 'nj'")
+    # phylogeny.add_argument("--otus_only", required=False, action='store_true', help='If set, use only one genome per OTU for phylogeny calculation.')
     return parser.parse_args(argv)
 
 
