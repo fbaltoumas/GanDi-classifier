@@ -355,16 +355,24 @@ class GenomeAAICalculator:
 
 
 class Phylogeny:
-    def __init__(self, result: pl.DataFrame, metric: str, method: str = 'nj') -> None:
+    def __init__(self, result: pl.DataFrame, metric: str, method: str = 'nj', otu_column: str = None) -> None:
         self.result = result
         self.value_column = metric
         self.method = method.lower()
         if self.method not in ['nj', 'upgma']:
             self.method = 'nj'
+        self.otu_column = otu_column
         self.tree = None
 
     def _build_distance_matrix(self) -> DistanceMatrix:
-        df = self.result.select(['query', 'seq_name', self.value_column]).drop_nulls(subset=[self.value_column])
+        df = self.result
+        if self.otu_column is not None and self.otu_column in df.columns:
+            # fall back to seq_name for rows with no OTU assignment, since they aren't
+            # known to share a cluster with anything and shouldn't be mislabeled as one.
+            df = df.with_columns(
+                pl.col(self.otu_column).fill_null(pl.col('seq_name')).alias('seq_name')
+            )
+        df = df.select(['query', 'seq_name', self.value_column]).drop_nulls(subset=[self.value_column])
         genomes = sorted(set(df['query'].to_list()) | set(df['seq_name'].to_list()))
         if len(genomes) < 2:
             raise RuntimeError(
@@ -651,7 +659,7 @@ def main(argv=None, prog=None):
                 unknown_otu = result.filter(pl.col(otu_col).is_null())
                 result_to_use = pl.concat([known_otu, unknown_otu], how='vertical')
             try:
-                phylogeny = Phylogeny(result_to_use, metric, args.tree_method)
+                phylogeny = Phylogeny(result_to_use, metric, args.tree_method, otu_column=otu_col)
                 phylogeny.build_tree()
             except RuntimeError as e:
                 logger.warning(f"Could not construct {metric.upper()}-based phylogenetic tree: {e}. Skipping...")
