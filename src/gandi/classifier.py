@@ -624,7 +624,7 @@ def main(argv=None, prog=None):
         if workflow in ['aai', 'full']:
             metrics_to_build.append('aai')
 
-        result_to_use = result
+        otu_col = None
         if args.otus_only:
             if args.category.lower() == 'plasmids':
                 otu_col = 'ptu'
@@ -632,18 +632,24 @@ def main(argv=None, prog=None):
                 otu_col = 'votu'
             else:
                 otu_col = 'motu'
-            if workflow == 'ani':
-                sort_cols, sort_desc = [otu_col, 'ani'], [False, True]
-            elif workflow == 'aai':
-                sort_cols, sort_desc = [otu_col, 'aai'], [False, True]
-            else:
-                sort_cols, sort_desc = [otu_col, 'ani', 'aai'], [False, True, True]
-            result_to_use = result_to_use.sort(
-                by=sort_cols, descending=sort_desc, nulls_last=True
-            ).unique(subset=['query', otu_col], keep='first')
+            if otu_col not in result.columns:
+                logger.warning(
+                    f"--otus_only requested, but the '{otu_col}' column was not found in the "
+                    f"database metadata for category '{args.category}'; skipping OTU filtering."
+                )
+                otu_col = None
 
         for metric in metrics_to_build:
             tree_file = output_path / f"phylogeny_{metric}.tree"
+            result_to_use = result
+            if otu_col is not None:
+                # rows with no OTU assignment aren't known to share a cluster with anything,
+                # so they're passed through as-is rather than deduplicated against each other.
+                known_otu = result.filter(pl.col(otu_col).is_not_null()).sort(
+                    by=metric, descending=True, nulls_last=True
+                ).unique(subset=['query', otu_col], keep='first')
+                unknown_otu = result.filter(pl.col(otu_col).is_null())
+                result_to_use = pl.concat([known_otu, unknown_otu], how='vertical')
             try:
                 phylogeny = Phylogeny(result_to_use, metric, args.tree_method)
                 phylogeny.build_tree()
