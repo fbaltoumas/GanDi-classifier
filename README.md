@@ -27,24 +27,16 @@ Contig classifier for the Global Anaerobic Digestion (GanDi) database
 
 ### External executables
 
-`gandi classifier` shells out to `skani`, `prodigal`/`prodigal-gv`, and `diamond`; `gandi download-db` shells out to `skani` and `diamond`. These are not Python packages and are not installed automatically — they need to be installed separately and be available on `PATH`. See [Installation](#installation) for how to install them via conda.
+`gandi classifier` shells out to `skani`, `prodigal`/`prodigal-gv`, and `diamond`; `gandi download-db` shells out to `skani` and `diamond`. These are not Python packages and are not installed automatically — they need to be installed separately and be available on `PATH`. See[Installation](#installation) for how to install them via conda. Alternatively, visit each dependency's repository, to view its installation instructions.
 
 - **[skani](https://github.com/bluenote-1215/skani)** (ANI workflow)
 
-  Alternatively to conda, download a prebuilt binary from the [skani releases page](https://github.com/bluenote-1215/skani/releases), or install via `cargo install skani` if you have a Rust toolchain.
-
 - **[prodigal](https://github.com/hyattpd/Prodigal)** (AAI workflow)
-
-  On Debian/Ubuntu, it's also available via `apt`:
-  ```bash
-  sudo apt install prodigal
-  ```
 
 - **[prodigal-gv](https://github.com/apcamargo/prodigal-gv)** (AAI workflow, used automatically by `gandi classifier` when `-c viruses` is given)
 
 - **[diamond](https://github.com/bbuchfink/diamond)** (AAI workflow)
 
-  Alternatively to conda, download a prebuilt binary from the [diamond releases page](https://github.com/bbuchfink/diamond/releases).
 
 ### Python packages
 
@@ -80,7 +72,9 @@ cd GanDi-classifier
 pip install .
 ```
 
-For an editable install (picks up code changes without reinstalling), use `pip install -e .` instead. This also installs the Python packages listed in [Dependencies](#python-packages).
+This also installs the Python packages listed in [Dependencies](#python-packages).
+
+**Note**: For an editable install (picks up code changes without reinstalling), use `pip install -e .` instead. 
 
 ### Windows users
 
