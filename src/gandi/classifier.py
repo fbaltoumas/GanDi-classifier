@@ -6,6 +6,8 @@ from pathlib import Path
 from shutil import which, copy2
 import argparse as ap
 
+from . import __version__
+
 logger = logging.getLogger(__name__)
 
 # 3rd party modules
@@ -44,7 +46,8 @@ def get_exe_location(exe_name: str) -> str:
 
 
 def cmd_arguments(argv=None, prog=None):
-    parser = ap.ArgumentParser(prog=prog)
+    parser = ap.ArgumentParser(prog=prog, description=f"gandi classifier {__version__}")
+    parser.add_argument("-v", "--version", action="version", version=f"gandi classifier {__version__}")
     general = parser.add_argument_group("Input/output and run type options")
     general.add_argument("-i", "--input", required=True, type=str, help="Input genome(s) file in FASTA format.")
     general.add_argument("-o", "--output", required=True, type=str, help="Output prefix")

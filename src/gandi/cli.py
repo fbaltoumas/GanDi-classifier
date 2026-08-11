@@ -1,11 +1,11 @@
 import argparse as ap
 import sys
 
-from . import classifier
+from . import __version__, classifier
 from . import download_db
 
 DESCRIPTION = (
-    "gandi: contig/genome classifier and reference-database downloader for the\n"
+    f"gandi {__version__}: contig/genome classifier and reference-database downloader for the\n"
     "Global Anaerobic Digestion (GanDi) database.\n"
     "\n"
     "Classify a genome against the database:\n"
@@ -22,6 +22,7 @@ def _build_parser():
         description=DESCRIPTION,
         formatter_class=ap.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("-v", "--version", action="version", version=f"gandi {__version__}")
     subparsers = parser.add_subparsers(dest="command", metavar="<subcommand>")
     subparsers.add_parser(
         "classifier",
@@ -44,6 +45,10 @@ def main(argv=None):
 
     if argv[0] in ("-h", "--help"):
         parser.print_help()
+        sys.exit(0)
+
+    if argv[0] in ("-v", "--version"):
+        print(f"gandi {__version__}")
         sys.exit(0)
 
     command, rest = argv[0], argv[1:]

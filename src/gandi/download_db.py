@@ -13,6 +13,8 @@ from functools import partial
 from urllib.error import URLError
 from urllib.request import urlopen, Request
 
+from . import __version__
+
 logger = logging.getLogger(__name__)
 
 
@@ -167,7 +169,8 @@ class DatabaseDownloader:
 
 
 def cmd_arguments(argv=None, prog=None):
-    parser = ap.ArgumentParser(prog=prog)
+    parser = ap.ArgumentParser(prog=prog, description=f"gandi download-db {__version__}")
+    parser.add_argument("-v", "--version", action="version", version=f"gandi download-db {__version__}")
     parser.add_argument("-o", "--output", required=False, default=None, help="Path to store databases (present working directory, i.e. '.' by default)")
     parser.add_argument("-t", "--threads", required=False, default=0, type=int, help='Number of CPU threads to use. Default: 0 (use all CPUs)')
     parser.add_argument("--quiet", required=False, action='store_true', help='Suppress informational logging output (only warnings and errors are shown).')
