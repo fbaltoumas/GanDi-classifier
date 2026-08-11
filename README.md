@@ -1,15 +1,78 @@
 # GanDi-classifier
-Contig classifier and reference-database downloader for the Global Anaerobic Digestion (GanDi) database
+Contig classifier for the Global Anaerobic Digestion (GanDi) database
+
+## Table of Contents
+
+- [Dependencies](#dependencies)
+  - [External executables](#external-executables)
+  - [Python packages](#python-packages)
+- [Installation](#installation)
+  - [a) Create a conda environment](#a-create-a-conda-environment)
+  - [b) Install the external dependencies through conda](#b-install-the-external-dependencies-through-conda)
+  - [c) Install the `gandi` package](#c-install-the-gandi-package)
+  - [Windows users](#windows-users)
+  - [Docker](#docker)
+- [Usage](#usage)
+  - [Overview](#overview)
+  - [Database download](#database-download)
+  - [Classification](#classification)
+  - [Examples](#examples)
+- [Troubleshooting](#troubleshooting)
+  - [`RuntimeError: NumPy was built with baseline optimizations... but your machine doesn't support...`](#runtimeerror-numpy-was-built-with-baseline-optimizations-but-your-machine-doesnt-support)
+  - [`Illegal instruction (core dumped)` after importing polars](#illegal-instruction-core-dumped-after-importing-polars)
+
+## Dependencies
+
+`gandi` requires **Python 3.11+**.
+
+### External executables
+
+`gandi classifier` shells out to `skani`, `prodigal`/`prodigal-gv`, and `diamond`; `gandi download-db` shells out to `skani` and `diamond`. These are not Python packages and are not installed automatically — they need to be installed separately and be available on `PATH`. See [Installation](#installation) for how to install them via conda.
+
+- **[skani](https://github.com/bluenote-1215/skani)** (ANI workflow)
+
+  Alternatively to conda, download a prebuilt binary from the [skani releases page](https://github.com/bluenote-1215/skani/releases), or install via `cargo install skani` if you have a Rust toolchain.
+
+- **[prodigal](https://github.com/hyattpd/Prodigal)** (AAI workflow)
+
+  On Debian/Ubuntu, it's also available via `apt`:
+  ```bash
+  sudo apt install prodigal
+  ```
+
+- **[prodigal-gv](https://github.com/apcamargo/prodigal-gv)** (AAI workflow, used automatically by `gandi classifier` when `-c viruses` is given)
+
+- **[diamond](https://github.com/bbuchfink/diamond)** (AAI workflow)
+
+  Alternatively to conda, download a prebuilt binary from the [diamond releases page](https://github.com/bbuchfink/diamond/releases).
+
+### Python packages
+
+- `numpy>=2.4.1`
+- `polars[rtcompat]>=1.37.1`
+- `pyfastx>=2.3.0`
+- `biopython>=1.86`
+
+These are installed automatically by `pip install .` — no separate step is needed for them.
 
 ## Installation
 
+### a) Create a conda environment
+
 ```bash
-pip install gandi
+conda create -n gandi python=3.11
+conda activate gandi
 ```
 
-This installs a single `gandi` command on your `PATH`, with two subcommands: `gandi classifier` and `gandi download-db`. Run `gandi --help` to see them.
+### b) Install the external dependencies through conda
 
-### Installing from source
+```bash
+conda install -c bioconda -c conda-forge skani prodigal prodigal-gv diamond
+```
+
+### c) Install the `gandi` package
+
+The package isn't published on PyPI yet, so install it from a git clone:
 
 ```bash
 git clone https://github.com/fbaltoumas/GanDi-classifier.git
@@ -17,56 +80,16 @@ cd GanDi-classifier
 pip install .
 ```
 
-For an editable install (picks up code changes without reinstalling), use `pip install -e .` instead.
+For an editable install (picks up code changes without reinstalling), use `pip install -e .` instead. This also installs the Python packages listed in [Dependencies](#python-packages).
 
-`gandi` also relies on the external tools listed below being installed separately and available on `PATH` — see [Installing dependencies](#installing-dependencies).
-
-## Installing dependencies
-
-`gandi classifier` shells out to `skani`, `prodigal`/`prodigal-gv`, and `diamond`; `gandi download-db` shells out to `skani` and `diamond`. These are not Python packages and are not installed by `pip install gandi` — they need to be installed separately and be available on `PATH`.
-
-The easiest way is via [bioconda](https://bioconda.github.io/), which covers all four tools:
-
-```bash
-conda install -c bioconda -c conda-forge skani prodigal prodigal-gv diamond
-```
-
-Or install each one individually:
-
-- **[skani](https://github.com/bluenote-1215/skani)** (ANI workflow)
-  ```bash
-  conda install -c bioconda skani
-  ```
-  Alternatively, download a prebuilt binary from the [skani releases page](https://github.com/bluenote-1215/skani/releases), or install via `cargo install skani` if you have a Rust toolchain.
-
-- **[prodigal](https://github.com/hyattpd/Prodigal)** (AAI workflow)
-  ```bash
-  conda install -c bioconda prodigal
-  ```
-  On Debian/Ubuntu, it's also available via `apt`:
-  ```bash
-  sudo apt install prodigal
-  ```
-
-- **[prodigal-gv](https://github.com/apcamargo/prodigal-gv)** (AAI workflow, used automatically by `gandi classifier` when `-c viruses` is given)
-  ```bash
-  conda install -c bioconda prodigal-gv
-  ```
-
-- **[diamond](https://github.com/bbuchfink/diamond)** (AAI workflow)
-  ```bash
-  conda install -c bioconda diamond
-  ```
-  Alternatively, download a prebuilt binary from the [diamond releases page](https://github.com/bbuchfink/diamond/releases).
-
-## Windows users
+### Windows users
 
 `gandi` and its dependencies (`skani`, `prodigal`, `prodigal-gv`, `diamond`) are not supported natively on Windows — `bioconda`, which provides these tools, only supports Linux and macOS. To run this tool on Windows:
 
 1. Install and configure the Windows Subsystem for Linux (WSL). See the [official Microsoft WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install).
-2. Once inside your WSL Linux environment, proceed as normal — follow the [Installation](#installation) and [Installing dependencies](#installing-dependencies) sections above exactly as you would on native Linux.
+2. Once inside your WSL Linux environment, proceed as normal — follow the steps above exactly as you would on native Linux.
 
-## Docker
+### Docker
 
 A `Dockerfile` is provided that bundles `gandi` together with all of its external dependencies (`skani`, `prodigal`, `prodigal-gv`, `diamond`) via bioconda, so no separate dependency installation is needed.
 
@@ -92,13 +115,49 @@ Note: the `Dockerfile` currently installs the `gandi` package via `git clone` + 
 
 ## Usage
 
+### Overview
+
+`gandi` is a single command with two subcommands:
+
+- `gandi classifier` — classifies contigs/genomes against a GanDi reference database (ANI/AAI workflows).
+- `gandi download-db` — downloads and builds the GanDi reference database.
+
+```
+$ gandi -h
+usage: gandi [-h] <subcommand> ...
+
+gandi: contig/genome classifier and reference-database downloader for the
+Global Anaerobic Digestion (GanDi) database.
+
+Classify a genome against the database:
+  gandi classifier -i genome.fasta -o output_dir -c plasmids -d /path/to/database
+
+Download and build the reference database:
+  gandi download-db -o /path/to/database
+
+positional arguments:
+  <subcommand>
+    classifier   Classify contigs/genomes against a GanDi reference database
+                 (ANI/AAI workflows).
+    download-db  Download and build the GanDi reference database.
+
+options:
+  -h, --help     show this help message and exit
+```
+
+### Database download
+
 Download and build the reference database (only needs to be done once):
 
 ```bash
 gandi download-db -o /path/to/database
 ```
 
-Classify a genome or set of contigs against it:
+This requires `skani` and `diamond` to already be on `PATH` (see [Installation](#installation)).
+
+### Classification
+
+Classify a genome or set of contigs against the database:
 
 ```bash
 gandi classifier -i input.fasta -o output_dir -w full \
@@ -106,6 +165,42 @@ gandi classifier -i input.fasta -o output_dir -w full \
 ```
 
 Run `gandi --help` for an overview of both subcommands, or `gandi classifier --help` / `gandi download-db --help` for their full lists of options.
+
+### Examples
+
+The `examples/` directory contains sample inputs for each category and workflow. Assuming a database has already been downloaded to `/path/to/database`:
+
+MAG input, once per workflow type:
+
+```bash
+gandi classifier -i examples/mag_input.fna -o mag_full_output -c mags -d /path/to/database -w full
+gandi classifier -i examples/mag_input.fna -o mag_ani_output -c mags -d /path/to/database -w ani
+gandi classifier -i examples/mag_input.fna -o mag_aai_output -c mags -d /path/to/database -w aai
+```
+
+Isolate genome, against the MAGs database:
+
+```bash
+gandi classifier -i examples/isolate_genome_input.fna -o isolate_output -c mags -d /path/to/database
+```
+
+Single virus genome:
+
+```bash
+gandi classifier -i examples/single_virus.fna -o single_virus_output -c viruses -d /path/to/database
+```
+
+Multiple virus genomes in one FASTA file, using `--multiple_genomes` so each sequence is treated as a separate genome:
+
+```bash
+gandi classifier -i examples/multiple_viruses.fna -o multiple_viruses_output -c viruses -d /path/to/database --multiple_genomes
+```
+
+Single plasmid:
+
+```bash
+gandi classifier -i examples/single_plasmid.fna -o single_plasmid_output -c plasmids -d /path/to/database
+```
 
 ## Troubleshooting
 
