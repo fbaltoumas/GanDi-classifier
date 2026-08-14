@@ -151,8 +151,8 @@ class SkaniJob:
         # otherwise default to Utf8 and the multiplication below would raise.
         proc_output = proc_output.with_columns([
             pl.col('ani').cast(pl.Float64),
-            (pl.col('qcov').cast(pl.Float64) * 100).alias('qcov'),
-            (pl.col('tcov').cast(pl.Float64) * 100).alias('tcov'),
+            (pl.col('qcov').cast(pl.Float64)).alias('qcov'),
+            (pl.col('tcov').cast(pl.Float64)).alias('tcov'),
         ])
         if proc_output.height == 0:
             logger.warning("Skani found no hits for the input sequence(s); ANI result will be empty.")
@@ -622,54 +622,45 @@ def main(argv=None, prog=None):
     result = result.drop('_metadata_matched')
 
     # save the processed result to a file
-    logger.info("=== Step 7: Saving final result ===")
-    result.write_csv(f"{output_path}/final-result.tsv", separator="\t")
-    logger.info(f"Final result saved to: {output_path}/final-result.tsv")
+    logger.info("=== Step 7: Saving processed result ===")
+    result.write_csv(f"{output_path}/processed-search-result.tsv", separator="\t")
+    logger.info(f"Processed result saved to: {output_path}/processed-search-result.tsv")
 
-    # if requested, construct phylogenetic tree(s) from the ANI/AAI distances
-    if args.create_tree:
-        logger.info("=== Step 8: Building phylogenetic tree(s) ===")
-        metrics_to_build = []
-        if workflow in ['ani', 'full']:
-            metrics_to_build.append('ani')
-        if workflow in ['aai', 'full']:
-            metrics_to_build.append('aai')
 
-        otu_col = None
-        if args.otus_only:
-            if args.category.lower() == 'plasmids':
-                otu_col = 'ptu'
-            elif args.category.lower() == 'viruses':
-                otu_col = 'votu'
-            else:
-                otu_col = 'motu'
-            if otu_col not in result.columns:
-                logger.warning(
-                    f"--otus_only requested, but the '{otu_col}' column was not found in the "
-                    f"database metadata for category '{args.category}'; skipping OTU filtering."
-                )
-                otu_col = None
+    # filter by ani and aai to get OTU assignment and genus assignment
+    logger.info("=== Step 8: Filtering results for OTU/genus assignment ===")
+    otu_assign = None
+    genus_assign = None
+    if workflow in ['full', 'ani']:
+        otu_assign = result.filter(pl.col("ani") >= 95)
+        otu_assign = otu_assign.filter(pl.col("genome_qcov") >= 85 | pl.col("genome_tcov") >= 85)
+    if workflow in ['full', 'aai']:
+        genus_assign = result.filter(pl.col("aai") >= 40)
+        genus_assign = genus_assign.filter(pl.col("proteome_tcov") >= 20 | pl.col("proteome_qcov") >= 20)
 
-        for metric in metrics_to_build:
-            tree_file = output_path / f"phylogeny_{metric}.tree"
-            result_to_use = result
-            if otu_col is not None:
-                # rows with no OTU assignment aren't known to share a cluster with anything,
-                # so they're passed through as-is rather than deduplicated against each other.
-                known_otu = result.filter(pl.col(otu_col).is_not_null()).sort(
-                    by=metric, descending=True, nulls_last=True
-                ).unique(subset=['query', otu_col], keep='first')
-                unknown_otu = result.filter(pl.col(otu_col).is_null())
-                result_to_use = pl.concat([known_otu, unknown_otu], how='vertical')
-            try:
-                phylogeny = Phylogeny(result_to_use, metric, args.tree_method, otu_column=otu_col)
-                phylogeny.build_tree()
-            except RuntimeError as e:
-                logger.warning(f"Could not construct {metric.upper()}-based phylogenetic tree: {e}. Skipping...")
-                continue
-            phylogeny.write_tree(tree_file)
-            logger.info(f"{metric.upper()}-based phylogenetic tree saved to: {tree_file}")
 
+    # Now, based on these results, assign OTU by ANI and genus by AAI.
+    # 
+    columns_to_keep_ani = ['query', 'seq_name', 'ani', 'genome_qcov', 'genome_tcov']
+    columns_to_keep_aai = ['query', 'seq_name', 'ani', 'genome_qcov', 'genome_tcov']
+    if args.category == 'viruses':
+        columns_to_keep_ani.extend(['votu', 'ictv_taxonomy', 'genome_type', 'host', 'host_range'])
+        columns_to_keep_aai.extend(['votu', 'ictv_taxonomy', 'genome_type', 'host', 'host_range'])
+    elif args.categoy == 'mags':
+        columns_to_keep_ani.extend(['motu', 'taxonomy'])
+        columns_to_keep_aai.extend(['motu', 'taxonomy'])
+    else:
+        columns_to_keep_ani.extend(['ptu', 'host'])
+        columns_to_keep_aai.extend(['ptu', 'host'])
+    if otu_assign:
+        otu_assign = otu_assign.sort(by='ani', descending=True)
+        otu_assign = otu_assign[columns_to_keep_ani]
+        otu_assign.write_csv("otu-classification.tsv", separator="\t")
+
+    if genus_assign:
+        genus_assign = genus_assign.sort(by='aai')
+        genus_assign = genus_assign[columns_to_keep_aai]
+        genus_assign.write_csv("genus-classification.tsv", separator="\t")
 
 if __name__ == "__main__":
     main()
