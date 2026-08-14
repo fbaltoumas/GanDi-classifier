@@ -629,8 +629,8 @@ def main(argv=None, prog=None):
 
     # filter by ani and aai to get OTU assignment and genus assignment
     logger.info("=== Step 8: Filtering results for OTU/genus assignment ===")
-    otu_assign = None
-    genus_assign = None
+    otu_assign = pl.DataFrame()
+    genus_assign = pl.DataFrame()
     if workflow in ['full', 'ani']:
         otu_assign = result.filter(pl.col("ani") >= 95)
         otu_assign = otu_assign.filter((pl.col("genome_qcov") >= 85) | (pl.col("genome_tcov") >= 85))
@@ -652,12 +652,12 @@ def main(argv=None, prog=None):
     else:
         columns_to_keep_ani.extend(['ptu', 'host'])
         columns_to_keep_aai.extend(['ptu', 'host'])
-    if otu_assign:
+    if not otu_assign.is_empty():
         otu_assign = otu_assign.sort(by='ani', descending=True)
         otu_assign = otu_assign[columns_to_keep_ani]
         otu_assign.write_csv("otu-classification.tsv", separator="\t")
 
-    if genus_assign:
+    if not genus_assign.is_empty():
         genus_assign = genus_assign.sort(by='aai')
         genus_assign = genus_assign[columns_to_keep_aai]
         genus_assign.write_csv("genus-classification.tsv", separator="\t")
