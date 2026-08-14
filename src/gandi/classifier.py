@@ -642,11 +642,11 @@ def main(argv=None, prog=None):
     # Now, based on these results, assign OTU by ANI and genus by AAI.
     # 
     columns_to_keep_ani = ['query', 'seq_name', 'ani', 'genome_qcov', 'genome_tcov']
-    columns_to_keep_aai = ['query', 'seq_name', 'ani', 'genome_qcov', 'genome_tcov']
-    if args.category == 'viruses':
+    columns_to_keep_aai = ['query', 'seq_name', 'aai', 'proteome_qcov', 'proteome_tcov']
+    if args.category.lower() == 'viruses':
         columns_to_keep_ani.extend(['votu', 'ictv_taxonomy', 'genome_type', 'host', 'host_range'])
         columns_to_keep_aai.extend(['votu', 'ictv_taxonomy', 'genome_type', 'host', 'host_range'])
-    elif args.categoy == 'mags':
+    elif args.category.lower() == 'mags':
         columns_to_keep_ani.extend(['motu', 'taxonomy'])
         columns_to_keep_aai.extend(['motu', 'taxonomy'])
     else:
@@ -655,12 +655,12 @@ def main(argv=None, prog=None):
     if not otu_assign.is_empty():
         otu_assign = otu_assign.sort(by='ani', descending=True)
         otu_assign = otu_assign[columns_to_keep_ani]
-        otu_assign.write_csv("otu-classification.tsv", separator="\t")
+        otu_assign.write_csv(f"{output_path}/otu-classification.tsv", separator="\t")
 
     if not genus_assign.is_empty():
-        genus_assign = genus_assign.sort(by='aai')
+        genus_assign = genus_assign.sort(by='aai', descending=True)
         genus_assign = genus_assign[columns_to_keep_aai]
-        genus_assign.write_csv("genus-classification.tsv", separator="\t")
+        genus_assign.write_csv(f"{output_path}/genus-classification.tsv", separator="\t")
 
 if __name__ == "__main__":
     main()

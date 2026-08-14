@@ -17,6 +17,7 @@ Contig classifier for the Global Anaerobic Digestion (GanDi) database
   - [Database download](#database-download)
   - [Classification](#classification)
   - [Examples](#examples)
+  - [Output structure](#output-structure)
 - [Troubleshooting](#troubleshooting)
   - [`RuntimeError: NumPy was built with baseline optimizations... but your machine doesn't support...`](#runtimeerror-numpy-was-built-with-baseline-optimizations-but-your-machine-doesnt-support)
   - [`Illegal instruction (core dumped)` after importing polars](#illegal-instruction-core-dumped-after-importing-polars)
@@ -195,6 +196,25 @@ Single plasmid:
 ```bash
 gandi classifier -i examples/single_plasmid.fna -o single_plasmid_output -c plasmids -d /path/to/database
 ```
+
+### Output structure
+
+`gandi classifier` writes all of its output into the directory given with `-o`. Which files appear depends on the workflow (`-w`) used, since the `ani`/`aai`-specific files are only produced by their respective workflow.
+
+**Main output files**
+
+- **`otu-classification.tsv`** — the primary result for "which reference OTU does my genome belong to?". It's the subset of hits with ANI ≥ 95% and either genome query or target coverage ≥ 85%, sorted by ANI (highest first). Written whenever the `ani`/`full` workflow finds at least one hit passing these thresholds.
+- **`genus-classification.tsv`** — the primary result for "which reference genus is my genome most related to?". It's the subset of hits with AAI ≥ 40% and either proteome query or target coverage ≥ 20%, sorted by AAI (highest first). Written whenever the `aai`/`full` workflow finds at least one hit passing these thresholds.
+
+**Other output files**
+
+- `processed-search-result.tsv` — every ANI/AAI hit found for the input, merged (in the `full` workflow) and annotated with database metadata, before the OTU/genus thresholds above are applied.
+- `ANI-result.tsv` — the processed skani hits (query, hit, ANI, coverage), sorted by ANI. Written by the `ani` and `full` workflows.
+- `AAI-result.tsv` — the processed AAI hits (query, hit, AAI, coverage, ortholog counts), sorted by AAI. Written by the `aai` and `full` workflows.
+- `skani_search.skani` — the raw, unprocessed output of the `skani search` command. Written by the `ani` and `full` workflows.
+- `prodigal.gff`, `prodigal.fna`, `prodigal.faa` — the gene/protein predictions from `prodigal`/`prodigal-gv` used to build the AAI workflow's query proteome. Written by the `aai` and `full` workflows.
+- `diamond-search.blout` — the raw `diamond blastp` hits used to calculate AAI. Written by the `aai` and `full` workflows.
+- A copy of the input FASTA file is also placed in the output directory, as the working copy `gandi classifier` actually ran against.
 
 ## Troubleshooting
 
