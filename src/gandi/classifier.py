@@ -633,10 +633,10 @@ def main(argv=None, prog=None):
     genus_assign = None
     if workflow in ['full', 'ani']:
         otu_assign = result.filter(pl.col("ani") >= 95)
-        otu_assign = otu_assign.filter(pl.col("genome_qcov") >= 85 | pl.col("genome_tcov") >= 85)
+        otu_assign = otu_assign.filter((pl.col("genome_qcov") >= 85) | (pl.col("genome_tcov") >= 85))
     if workflow in ['full', 'aai']:
         genus_assign = result.filter(pl.col("aai") >= 40)
-        genus_assign = genus_assign.filter(pl.col("proteome_tcov") >= 20 | pl.col("proteome_qcov") >= 20)
+        genus_assign = genus_assign.filter((pl.col("proteome_tcov") >= 20) | (pl.col("proteome_qcov") >= 20))
 
 
     # Now, based on these results, assign OTU by ANI and genus by AAI.
